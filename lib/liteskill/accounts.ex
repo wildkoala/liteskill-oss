@@ -145,6 +145,7 @@ defmodule Liteskill.Accounts do
     if User.valid_password?(user, current_password) do
       user
       |> User.password_changeset(%{password: new_password})
+      |> Ecto.Changeset.put_change(:force_password_change, false)
       |> Repo.update()
     else
       {:error, :invalid_current_password}
@@ -157,6 +158,17 @@ defmodule Liteskill.Accounts do
   def setup_admin_password(user, password) do
     user
     |> User.password_changeset(%{password: password})
+    |> Repo.update()
+  end
+
+  @doc """
+  Sets a temporary password for a user (admin action). Forces the user
+  to change their password on next login.
+  """
+  def set_temporary_password(user, password) do
+    user
+    |> User.password_changeset(%{password: password})
+    |> Ecto.Changeset.put_change(:force_password_change, true)
     |> Repo.update()
   end
 

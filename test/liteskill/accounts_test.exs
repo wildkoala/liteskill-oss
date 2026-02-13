@@ -235,6 +235,19 @@ defmodule Liteskill.AccountsTest do
       assert {:error, changeset} = Accounts.change_password(user, "supersecretpass123", "short")
       assert "should be at least 12 character(s)" in errors_on(changeset).password
     end
+
+    test "clears force_password_change flag on success" do
+      {:ok, user} =
+        Accounts.register_user(%{email: unique_email(), password: "supersecretpass123"})
+
+      {:ok, forced} = Accounts.set_temporary_password(user, "temporarypass123")
+      assert forced.force_password_change == true
+
+      {:ok, updated} =
+        Accounts.change_password(forced, "temporarypass123", "newpermanentpass1")
+
+      assert updated.force_password_change == false
+    end
   end
 
   describe "setup_admin_password/2" do
@@ -250,6 +263,51 @@ defmodule Liteskill.AccountsTest do
 
       assert {:error, changeset} = Accounts.setup_admin_password(admin, "short")
       assert "should be at least 12 character(s)" in errors_on(changeset).password
+    end
+  end
+
+  describe "set_temporary_password/2" do
+    test "sets password and force_password_change flag" do
+      {:ok, user} =
+        Accounts.register_user(%{email: unique_email(), password: "supersecretpass123"})
+
+      assert user.force_password_change == false
+
+      assert {:ok, updated} = Accounts.set_temporary_password(user, "temporarypass123")
+      assert updated.force_password_change == true
+      assert User.valid_password?(updated, "temporarypass123")
+    end
+
+    test "user can authenticate with temporary password" do
+      email = unique_email()
+      {:ok, user} = Accounts.register_user(%{email: email, password: "supersecretpass123"})
+
+      {:ok, _} = Accounts.set_temporary_password(user, "temporarypass123")
+
+      assert {:ok, authed} = Accounts.authenticate_by_email_password(email, "temporarypass123")
+      assert authed.force_password_change == true
+    end
+
+    test "validates password length" do
+      {:ok, user} =
+        Accounts.register_user(%{email: unique_email(), password: "supersecretpass123"})
+
+      assert {:error, changeset} = Accounts.set_temporary_password(user, "short")
+      assert "should be at least 12 character(s)" in errors_on(changeset).password
+    end
+  end
+
+  describe "User.force_password_change" do
+    test "defaults to false on new users" do
+      {:ok, user} =
+        Accounts.register_user(%{email: unique_email(), password: "supersecretpass123"})
+
+      assert user.force_password_change == false
+    end
+
+    test "defaults to false for OIDC users" do
+      {:ok, user} = Accounts.find_or_create_from_oidc(unique_oidc_attrs())
+      assert user.force_password_change == false
     end
   end
 

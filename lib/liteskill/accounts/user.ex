@@ -22,6 +22,7 @@ defmodule Liteskill.Accounts.User do
     field :password, :string, virtual: true, redact: true
     field :password_hash, :string
     field :role, :string, default: "user"
+    field :force_password_change, :boolean, default: false
     field :preferences, :map, default: %{}
 
     timestamps(type: :utc_datetime)

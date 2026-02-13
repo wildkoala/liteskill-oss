@@ -115,11 +115,16 @@ defmodule LiteskillWeb.ChatLive do
 
   @impl true
   def handle_params(params, _uri, socket) do
-    {:noreply,
-     socket
-     |> push_event("nav", %{})
-     |> push_accent_color()
-     |> apply_action(socket.assigns.live_action, params)}
+    if socket.assigns.current_user.force_password_change &&
+         socket.assigns.live_action != :password do
+      {:noreply, push_navigate(socket, to: ~p"/profile/password")}
+    else
+      {:noreply,
+       socket
+       |> push_event("nav", %{})
+       |> push_accent_color()
+       |> apply_action(socket.assigns.live_action, params)}
+    end
   end
 
   defp push_accent_color(socket) do
@@ -2772,7 +2777,8 @@ defmodule LiteskillWeb.ChatLive do
   # --- Profile Event Delegation ---
 
   @profile_events ~w(change_password promote_user demote_user create_group
-    admin_delete_group view_group admin_add_member admin_remove_member set_accent_color)
+    admin_delete_group view_group admin_add_member admin_remove_member set_accent_color
+    show_temp_password_form cancel_temp_password set_temp_password)
 
   def handle_event(event, params, socket) when event in @profile_events do
     ProfileLive.handle_event(event, params, socket)
