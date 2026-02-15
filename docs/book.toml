@@ -8,8 +8,8 @@ src = "src"
 [output.html]
 default-theme = "navy"
 preferred-dark-theme = "navy"
-git-repository-url = "https://github.com/liteskill/liteskill-oss"
-edit-url-template = "https://github.com/liteskill/liteskill-oss/edit/main/docs/{path}"
+git-repository-url = "https://github.com/liteskill-ai/liteskill-oss"
+edit-url-template = "https://github.com/liteskill-ai/liteskill-oss/edit/main/docs/{path}"
 no-section-label = true
 additional-css = ["theme/custom.css"]
 
