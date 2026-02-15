@@ -1,0 +1,17 @@
+[book]
+title = "Liteskill Documentation"
+authors = ["Liteskill Contributors"]
+description = "Documentation for Liteskill — a self-hosted AI chat application built with Elixir and Phoenix"
+language = "en"
+src = "src"
+
+[output.html]
+default-theme = "navy"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/liteskill/liteskill-oss"
+edit-url-template = "https://github.com/liteskill/liteskill-oss/edit/main/docs/{path}"
+no-section-label = true
+additional-css = ["theme/custom.css"]
+
+[output.html.search]
+enable = true
