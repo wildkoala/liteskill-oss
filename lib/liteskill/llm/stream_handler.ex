@@ -15,6 +15,7 @@ defmodule Liteskill.LLM.StreamHandler do
   alias Liteskill.Aggregate.Loader
   alias Liteskill.Chat.{ConversationAggregate, Projector}
   alias Liteskill.LLM.ToolUtils
+  alias Liteskill.Usage
 
   require Logger
 
@@ -123,6 +124,27 @@ defmodule Liteskill.LLM.StreamHandler do
     call_opts = build_call_opts(opts)
 
     case stream_fn.(model_id, messages, on_text_chunk, call_opts) do
+      {:ok, full_content, tool_calls, usage} ->
+        latency_ms = System.monotonic_time(:millisecond) - start_time
+
+        if tool_calls != [] do
+          # coveralls-ignore-start
+          handle_tool_calls(
+            stream_id,
+            message_id,
+            messages,
+            full_content,
+            tool_calls,
+            latency_ms,
+            usage,
+            opts
+          )
+
+          # coveralls-ignore-stop
+        else
+          complete_stream(stream_id, message_id, full_content, latency_ms, usage, opts)
+        end
+
       {:ok, full_content, tool_calls} ->
         latency_ms = System.monotonic_time(:millisecond) - start_time
 
@@ -134,10 +156,11 @@ defmodule Liteskill.LLM.StreamHandler do
             full_content,
             tool_calls,
             latency_ms,
+            nil,
             opts
           )
         else
-          complete_stream(stream_id, message_id, full_content, latency_ms)
+          complete_stream(stream_id, message_id, full_content, latency_ms, nil, opts)
         end
 
       {:error, %{status: status}} when status in [429, 503] ->
@@ -174,7 +197,8 @@ defmodule Liteskill.LLM.StreamHandler do
             text = ReqLLM.Response.text(response) || ""
             raw_tool_calls = ReqLLM.Response.tool_calls(response) || []
             tool_calls = Enum.map(raw_tool_calls, &normalize_tool_call/1)
-            {:ok, text, tool_calls}
+            usage = ReqLLM.Response.usage(response)
+            {:ok, text, tool_calls, usage}
 
           {:error, reason} ->
             {:error, normalize_error(reason)}
@@ -440,13 +464,14 @@ defmodule Liteskill.LLM.StreamHandler do
          full_content,
          tool_calls,
          latency_ms,
+         usage,
          opts
        ) do
     tools = Keyword.get(opts, :tools, [])
     validated = validate_tool_calls(tool_calls, tools)
 
     if validated == [] do
-      complete_stream(stream_id, message_id, full_content, latency_ms)
+      complete_stream(stream_id, message_id, full_content, latency_ms, usage, opts)
     else
       do_handle_tool_calls(
         stream_id,
@@ -455,6 +480,7 @@ defmodule Liteskill.LLM.StreamHandler do
         full_content,
         validated,
         latency_ms,
+        usage,
         opts
       )
     end
@@ -467,6 +493,7 @@ defmodule Liteskill.LLM.StreamHandler do
          full_content,
          parsed_tool_calls,
          latency_ms,
+         usage,
          opts
        ) do
     auto_confirm = Keyword.get(opts, :auto_confirm, false)
@@ -503,7 +530,15 @@ defmodule Liteskill.LLM.StreamHandler do
 
     if !auto_confirm, do: Phoenix.PubSub.unsubscribe(Liteskill.PubSub, approval_topic)
 
-    complete_stream_with_stop_reason(stream_id, message_id, full_content, "tool_use", latency_ms)
+    complete_stream_with_stop_reason(
+      stream_id,
+      message_id,
+      full_content,
+      "tool_use",
+      latency_ms,
+      usage,
+      opts
+    )
 
     # Build messages for the next round
     assistant_content = build_assistant_content(full_content, parsed_tool_calls)
@@ -643,19 +678,22 @@ defmodule Liteskill.LLM.StreamHandler do
 
   # -- Stream completion / failure --
 
-  defp complete_stream(stream_id, message_id, full_content, latency_ms) do
+  defp complete_stream(stream_id, message_id, full_content, latency_ms, usage, opts) do
     command =
       {:complete_stream,
        %{
          message_id: message_id,
          full_content: full_content,
          stop_reason: "end_turn",
-         latency_ms: latency_ms
+         latency_ms: latency_ms,
+         input_tokens: get_in_usage(usage, :input_tokens),
+         output_tokens: get_in_usage(usage, :output_tokens)
        }}
 
     case Loader.execute(ConversationAggregate, stream_id, command) do
       {:ok, _state, events} ->
         Projector.project_events(stream_id, events)
+        maybe_record_usage(usage, message_id, latency_ms, "end_turn", opts)
         :ok
 
       # coveralls-ignore-next-line
@@ -669,7 +707,9 @@ defmodule Liteskill.LLM.StreamHandler do
          message_id,
          full_content,
          stop_reason,
-         latency_ms
+         latency_ms,
+         usage,
+         opts
        ) do
     command =
       {:complete_stream,
@@ -677,12 +717,15 @@ defmodule Liteskill.LLM.StreamHandler do
          message_id: message_id,
          full_content: full_content,
          stop_reason: stop_reason,
-         latency_ms: latency_ms
+         latency_ms: latency_ms,
+         input_tokens: get_in_usage(usage, :input_tokens),
+         output_tokens: get_in_usage(usage, :output_tokens)
        }}
 
     case Loader.execute(ConversationAggregate, stream_id, command) do
       {:ok, _state, events} ->
         Projector.project_events(stream_id, events)
+        maybe_record_usage(usage, message_id, latency_ms, stop_reason, opts)
         :ok
 
       # coveralls-ignore-next-line
@@ -690,6 +733,103 @@ defmodule Liteskill.LLM.StreamHandler do
         {:error, reason}
     end
   end
+
+  # -- Usage recording --
+
+  defp maybe_record_usage(nil, _message_id, _latency_ms, _stop_reason, _opts), do: :ok
+
+  defp maybe_record_usage(usage, message_id, latency_ms, _stop_reason, opts) do
+    user_id = Keyword.get(opts, :user_id)
+
+    if user_id do
+      model_id = get_model_id(opts)
+      llm_model = Keyword.get(opts, :llm_model)
+      input_tokens = usage[:input_tokens] || 0
+      output_tokens = usage[:output_tokens] || 0
+
+      {input_cost, output_cost, total_cost} =
+        resolve_costs(usage, llm_model, input_tokens, output_tokens)
+
+      attrs = %{
+        user_id: user_id,
+        conversation_id: Keyword.get(opts, :conversation_id),
+        message_id: message_id,
+        model_id: model_id,
+        llm_model_id: get_llm_model_id(opts),
+        input_tokens: input_tokens,
+        output_tokens: output_tokens,
+        total_tokens: usage[:total_tokens] || 0,
+        reasoning_tokens: usage[:reasoning_tokens] || 0,
+        cached_tokens: usage[:cached_tokens] || 0,
+        cache_creation_tokens: usage[:cache_creation_tokens] || 0,
+        input_cost: input_cost,
+        output_cost: output_cost,
+        reasoning_cost: to_decimal(usage[:reasoning_cost]),
+        total_cost: total_cost,
+        latency_ms: latency_ms,
+        call_type: "stream",
+        tool_round: Keyword.get(opts, :tool_round, 0)
+      }
+
+      Usage.record_usage(attrs)
+    end
+
+    :ok
+  end
+
+  defp get_model_id(opts) do
+    case Keyword.get(opts, :llm_model) do
+      %{model_id: id} -> id
+      _ -> Keyword.get(opts, :model_id, "unknown")
+    end
+  end
+
+  defp get_llm_model_id(opts) do
+    case Keyword.get(opts, :llm_model) do
+      %{id: id} -> id
+      _ -> nil
+    end
+  end
+
+  defp get_in_usage(nil, _key), do: nil
+  defp get_in_usage(usage, key), do: usage[key]
+
+  defp to_decimal(nil), do: nil
+  # coveralls-ignore-next-line
+  defp to_decimal(%Decimal{} = d), do: d
+  defp to_decimal(val) when is_float(val), do: Decimal.from_float(val)
+  # coveralls-ignore-next-line
+  defp to_decimal(val) when is_integer(val), do: Decimal.new(val)
+
+  defp resolve_costs(usage, llm_model, input_tokens, output_tokens) do
+    api_input = to_decimal(usage[:input_cost])
+    api_output = to_decimal(usage[:output_cost])
+    api_total = to_decimal(usage[:total_cost])
+
+    if api_total do
+      {api_input, api_output, api_total}
+    else
+      input_cost = cost_from_rate(input_tokens, llm_model && llm_model.input_cost_per_million)
+      output_cost = cost_from_rate(output_tokens, llm_model && llm_model.output_cost_per_million)
+
+      total_cost =
+        if input_cost || output_cost do
+          Decimal.add(input_cost || Decimal.new(0), output_cost || Decimal.new(0))
+        end
+
+      {input_cost, output_cost, total_cost}
+    end
+  end
+
+  defp cost_from_rate(_tokens, nil), do: nil
+  # coveralls-ignore-next-line
+  defp cost_from_rate(0, _rate), do: Decimal.new(0)
+
+  defp cost_from_rate(tokens, rate) do
+    tokens |> Decimal.new() |> Decimal.mult(rate) |> Decimal.div(1_000_000)
+  end
+
+  # -- Stream failure --
 
   defp fail_stream(stream_id, message_id, error_type, error_message, retry_count) do
     command =

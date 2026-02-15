@@ -233,6 +233,7 @@ defmodule Liteskill.Runs.Runner do
           tools: tools,
           tool_servers: tool_servers,
           user_id: user_id,
+          run_id: run_id,
           prompt: handoff.prompt,
           prior_context: format_prior_context(handoff.prior_outputs)
         }

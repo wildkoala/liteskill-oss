@@ -11,6 +11,7 @@ defmodule Liteskill.LLM do
   """
 
   alias Liteskill.LLM.StreamHandler
+  alias Liteskill.Usage
 
   @doc """
   Sends a non-streaming completion request.
@@ -67,6 +68,7 @@ defmodule Liteskill.LLM do
     case generate_fn.(model, context, req_opts) do
       {:ok, response} ->
         text = ReqLLM.Response.text(response) || ""
+        maybe_record_complete_usage(response, model, opts)
 
         {:ok,
          %{"output" => %{"message" => %{"role" => "assistant", "content" => [%{"text" => text}]}}}}
@@ -82,6 +84,86 @@ defmodule Liteskill.LLM do
   end
 
   # coveralls-ignore-stop
+
+  defp maybe_record_complete_usage(response, model, opts) do
+    user_id = Keyword.get(opts, :user_id)
+
+    if user_id do
+      usage = ReqLLM.Response.usage(response) || %{}
+      model_id = if is_map(model), do: model[:id], else: to_string(model)
+
+      llm_model = Keyword.get(opts, :llm_model)
+
+      llm_model_id =
+        case llm_model do
+          %{id: id} -> id
+          _ -> nil
+        end
+
+      input_tokens = usage[:input_tokens] || 0
+      output_tokens = usage[:output_tokens] || 0
+
+      {input_cost, output_cost, total_cost} =
+        resolve_costs(usage, llm_model, input_tokens, output_tokens)
+
+      attrs = %{
+        user_id: user_id,
+        conversation_id: Keyword.get(opts, :conversation_id),
+        model_id: model_id || "unknown",
+        llm_model_id: llm_model_id,
+        input_tokens: input_tokens,
+        output_tokens: output_tokens,
+        total_tokens: usage[:total_tokens] || 0,
+        reasoning_tokens: usage[:reasoning_tokens] || 0,
+        cached_tokens: usage[:cached_tokens] || 0,
+        cache_creation_tokens: usage[:cache_creation_tokens] || 0,
+        input_cost: input_cost,
+        output_cost: output_cost,
+        reasoning_cost: to_decimal(usage[:reasoning_cost]),
+        total_cost: total_cost,
+        call_type: "complete"
+      }
+
+      Usage.record_usage(attrs)
+    end
+  end
+
+  defp to_decimal(nil), do: nil
+  # coveralls-ignore-next-line
+  defp to_decimal(%Decimal{} = d), do: d
+  # coveralls-ignore-next-line
+  defp to_decimal(val) when is_float(val), do: Decimal.from_float(val)
+  # coveralls-ignore-next-line
+  defp to_decimal(val) when is_integer(val), do: Decimal.new(val)
+
+  defp resolve_costs(usage, llm_model, input_tokens, output_tokens) do
+    api_input = to_decimal(usage[:input_cost])
+    api_output = to_decimal(usage[:output_cost])
+    api_total = to_decimal(usage[:total_cost])
+
+    if api_total do
+      # coveralls-ignore-next-line
+      {api_input, api_output, api_total}
+    else
+      input_cost = cost_from_rate(input_tokens, llm_model && llm_model.input_cost_per_million)
+      output_cost = cost_from_rate(output_tokens, llm_model && llm_model.output_cost_per_million)
+
+      total_cost =
+        if input_cost || output_cost do
+          Decimal.add(input_cost || Decimal.new(0), output_cost || Decimal.new(0))
+        end
+
+      {input_cost, output_cost, total_cost}
+    end
+  end
+
+  defp cost_from_rate(_tokens, nil), do: nil
+  # coveralls-ignore-next-line
+  defp cost_from_rate(0, _rate), do: Decimal.new(0)
+
+  defp cost_from_rate(tokens, rate) do
+    tokens |> Decimal.new() |> Decimal.mult(rate) |> Decimal.div(1_000_000)
+  end
 
   @doc """
   Returns active LLM models available to the given user (DB-only).

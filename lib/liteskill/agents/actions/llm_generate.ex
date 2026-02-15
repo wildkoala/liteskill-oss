@@ -138,8 +138,13 @@ defmodule Liteskill.Agents.Actions.LlmGenerate do
         req_opts
       end
 
+    start_time = System.monotonic_time(:millisecond)
+
     case ReqLLM.generate_text(model_spec, llm_context, req_opts) do
       {:ok, response} ->
+        latency_ms = System.monotonic_time(:millisecond) - start_time
+        record_usage(response, llm_model, state, latency_ms, round)
+
         text = ReqLLM.Response.text(response) || ""
         raw_tool_calls = ReqLLM.Response.tool_calls(response) || []
 
@@ -208,4 +213,73 @@ defmodule Liteskill.Agents.Actions.LlmGenerate do
     context_msgs = context.messages |> Jason.encode!() |> Jason.decode!()
     [system_msg | context_msgs]
   end
+
+  # -- Usage recording --
+
+  defp record_usage(response, llm_model, state, latency_ms, tool_round) do
+    user_id = state[:user_id]
+
+    if user_id do
+      usage = ReqLLM.Response.usage(response) || %{}
+      input_tokens = usage[:input_tokens] || 0
+      output_tokens = usage[:output_tokens] || 0
+
+      {input_cost, output_cost, total_cost} =
+        resolve_costs(usage, llm_model, input_tokens, output_tokens)
+
+      Liteskill.Usage.record_usage(%{
+        user_id: user_id,
+        run_id: state[:run_id],
+        model_id: llm_model.model_id,
+        llm_model_id: llm_model.id,
+        input_tokens: input_tokens,
+        output_tokens: output_tokens,
+        total_tokens: usage[:total_tokens] || 0,
+        reasoning_tokens: usage[:reasoning_tokens] || 0,
+        cached_tokens: usage[:cached_tokens] || 0,
+        cache_creation_tokens: usage[:cache_creation_tokens] || 0,
+        input_cost: input_cost,
+        output_cost: output_cost,
+        reasoning_cost: to_decimal(usage[:reasoning_cost]),
+        total_cost: total_cost,
+        latency_ms: latency_ms,
+        call_type: "complete",
+        tool_round: tool_round
+      })
+    end
+  end
+
+  # coveralls-ignore-start
+  defp resolve_costs(usage, llm_model, input_tokens, output_tokens) do
+    api_input = to_decimal(usage[:input_cost])
+    api_output = to_decimal(usage[:output_cost])
+    api_total = to_decimal(usage[:total_cost])
+
+    if api_total do
+      {api_input, api_output, api_total}
+    else
+      input_cost = cost_from_rate(input_tokens, llm_model && llm_model.input_cost_per_million)
+      output_cost = cost_from_rate(output_tokens, llm_model && llm_model.output_cost_per_million)
+
+      total_cost =
+        if input_cost || output_cost do
+          Decimal.add(input_cost || Decimal.new(0), output_cost || Decimal.new(0))
+        end
+
+      {input_cost, output_cost, total_cost}
+    end
+  end
+
+  defp cost_from_rate(_tokens, nil), do: nil
+  defp cost_from_rate(0, _rate), do: Decimal.new(0)
+
+  defp cost_from_rate(tokens, rate) do
+    tokens |> Decimal.new() |> Decimal.mult(rate) |> Decimal.div(1_000_000)
+  end
+
+  defp to_decimal(nil), do: nil
+  defp to_decimal(%Decimal{} = d), do: d
+  defp to_decimal(val) when is_float(val), do: Decimal.from_float(val)
+  defp to_decimal(val) when is_integer(val), do: Decimal.new(val)
+  # coveralls-ignore-stop
 end

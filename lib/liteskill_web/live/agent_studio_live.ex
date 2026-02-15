@@ -42,6 +42,8 @@ defmodule LiteskillWeb.AgentStudioLive do
       studio_team: nil,
       studio_runs: [],
       studio_run: nil,
+      run_usage: nil,
+      run_usage_by_model: [],
       studio_schedules: [],
       studio_schedule: nil,
       agent_form: agent_form(),
@@ -319,9 +321,17 @@ defmodule LiteskillWeb.AgentStudioLive do
 
     case Runs.get_run(run_id, user_id) do
       {:ok, run} ->
+        run_usage = Liteskill.Usage.usage_by_run(run.id)
+        run_usage_by_model = Liteskill.Usage.usage_by_run_and_model(run.id)
+
         socket
         |> reset_common()
-        |> Phoenix.Component.assign(studio_run: run, page_title: run.name)
+        |> Phoenix.Component.assign(
+          studio_run: run,
+          run_usage: run_usage,
+          run_usage_by_model: run_usage_by_model,
+          page_title: run.name
+        )
 
       {:error, _} ->
         socket

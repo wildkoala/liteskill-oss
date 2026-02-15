@@ -34,6 +34,7 @@
     "lib/liteskill/schedules/schedule_tick.ex",
     "lib/liteskill/schedules/schedule_worker.ex",
     "lib/liteskill_web/live/profile_live.ex",
+    "lib/liteskill_web/live/admin_live.ex",
     "lib/liteskill_web/markdown.ex",
     "lib/liteskill_web/plugs/live_auth.ex",
     "lib/liteskill/mailer.ex",
@@ -42,6 +43,7 @@
     "lib/liteskill/application.ex",
     "lib/liteskill/release.ex",
     "lib/liteskill/crypto/encrypted_map.ex",
+    "lib/liteskill/usage/usage_record.ex",
     "test/support/",
     "deps/"
   ]

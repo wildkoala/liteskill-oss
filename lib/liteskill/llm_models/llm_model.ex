@@ -21,6 +21,8 @@ defmodule Liteskill.LlmModels.LlmModel do
     field :model_config, Liteskill.Crypto.EncryptedMap, default: %{}
     field :instance_wide, :boolean, default: false
     field :status, :string, default: "active"
+    field :input_cost_per_million, :decimal
+    field :output_cost_per_million, :decimal
 
     belongs_to :provider, Liteskill.LlmProviders.LlmProvider
     belongs_to :user, Liteskill.Accounts.User
@@ -39,6 +41,8 @@ defmodule Liteskill.LlmModels.LlmModel do
       :model_config,
       :instance_wide,
       :status,
+      :input_cost_per_million,
+      :output_cost_per_million,
       :provider_id,
       :user_id
     ])

@@ -62,11 +62,13 @@ defmodule LiteskillWeb.Router do
       live "/c/:conversation_id", ChatLive, :show
       live "/profile", ChatLive, :info
       live "/profile/password", ChatLive, :password
-      live "/profile/admin/servers", ChatLive, :admin_servers
-      live "/profile/admin/users", ChatLive, :admin_users
-      live "/profile/admin/groups", ChatLive, :admin_groups
-      live "/profile/admin/providers", ChatLive, :admin_providers
-      live "/profile/admin/models", ChatLive, :admin_models
+      live "/admin", ChatLive, :admin_usage
+      live "/admin/usage", ChatLive, :admin_usage
+      live "/admin/servers", ChatLive, :admin_servers
+      live "/admin/users", ChatLive, :admin_users
+      live "/admin/groups", ChatLive, :admin_groups
+      live "/admin/providers", ChatLive, :admin_providers
+      live "/admin/models", ChatLive, :admin_models
       live "/wiki", ChatLive, :wiki
       live "/wiki/:document_id", ChatLive, :wiki_page_show
       live "/sources", ChatLive, :sources

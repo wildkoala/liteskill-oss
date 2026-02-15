@@ -4,6 +4,7 @@ defmodule Liteskill.LLM.StreamHandlerTest do
   alias Liteskill.Chat
   alias Liteskill.EventStore.Postgres, as: Store
   alias Liteskill.LLM.StreamHandler
+  alias Liteskill.Usage.UsageRecord
 
   setup do
     Application.put_env(:liteskill, Liteskill.LLM,
@@ -64,6 +65,13 @@ defmodule Liteskill.LLM.StreamHandlerTest do
 
         r1.(model_id, messages, on_chunk, call_opts)
       end
+    end
+  end
+
+  defp text_stream_fn_with_usage(text, usage) do
+    fn _model_id, _messages, on_chunk, _opts ->
+      Enum.each(String.graphemes(text), fn char -> on_chunk.(char) end)
+      {:ok, text, [], usage}
     end
   end
 
@@ -784,6 +792,202 @@ defmodule Liteskill.LLM.StreamHandlerTest do
       }
 
       assert StreamHandler.to_req_llm_model(llm_model) == %{id: "gpt-4o", provider: :openai}
+    end
+  end
+
+  describe "usage recording" do
+    test "records usage when user_id and usage are present", %{
+      user: user,
+      conversation: conv
+    } do
+      usage = %{
+        input_tokens: 100,
+        output_tokens: 50,
+        total_tokens: 150,
+        reasoning_tokens: 0,
+        cached_tokens: 10,
+        cache_creation_tokens: 5,
+        input_cost: 0.003,
+        output_cost: 0.0075,
+        total_cost: 0.0105
+      }
+
+      assert :ok =
+               StreamHandler.handle_stream(
+                 conv.stream_id,
+                 [%{role: :user, content: "test"}],
+                 model_id: "test-model",
+                 user_id: user.id,
+                 conversation_id: conv.id,
+                 stream_fn: text_stream_fn_with_usage("Hello!", usage)
+               )
+
+      records = Liteskill.Repo.all(UsageRecord)
+      assert length(records) == 1
+
+      record = hd(records)
+      assert record.user_id == user.id
+      assert record.conversation_id == conv.id
+      assert record.model_id == "test-model"
+      assert record.input_tokens == 100
+      assert record.output_tokens == 50
+      assert record.total_tokens == 150
+      assert record.call_type == "stream"
+    end
+
+    test "does not record usage when user_id is missing", %{conversation: conv} do
+      usage = %{input_tokens: 10, output_tokens: 5, total_tokens: 15}
+
+      assert :ok =
+               StreamHandler.handle_stream(
+                 conv.stream_id,
+                 [%{role: :user, content: "test"}],
+                 model_id: "test-model",
+                 stream_fn: text_stream_fn_with_usage("Hi", usage)
+               )
+
+      assert Liteskill.Repo.all(UsageRecord) == []
+    end
+
+    test "does not record usage when usage is nil (3-tuple)", %{
+      user: user,
+      conversation: conv
+    } do
+      assert :ok =
+               StreamHandler.handle_stream(
+                 conv.stream_id,
+                 [%{role: :user, content: "test"}],
+                 model_id: "test-model",
+                 user_id: user.id,
+                 conversation_id: conv.id,
+                 stream_fn: text_stream_fn("Hello!")
+               )
+
+      assert Liteskill.Repo.all(UsageRecord) == []
+    end
+
+    test "populates input_tokens and output_tokens on AssistantStreamCompleted event", %{
+      conversation: conv
+    } do
+      usage = %{input_tokens: 200, output_tokens: 80, total_tokens: 280}
+
+      assert :ok =
+               StreamHandler.handle_stream(
+                 conv.stream_id,
+                 [%{role: :user, content: "test"}],
+                 model_id: "test-model",
+                 stream_fn: text_stream_fn_with_usage("Hi", usage)
+               )
+
+      events = Store.read_stream_forward(conv.stream_id)
+      completed = Enum.find(events, &(&1.event_type == "AssistantStreamCompleted"))
+      assert completed.data["input_tokens"] == 200
+      assert completed.data["output_tokens"] == 80
+    end
+
+    test "records usage with llm_model model_id", %{user: user, conversation: conv} do
+      llm_model = %Liteskill.LlmModels.LlmModel{
+        model_id: "claude-custom",
+        provider: %Liteskill.LlmProviders.LlmProvider{
+          provider_type: "anthropic",
+          api_key: "test-key",
+          provider_config: %{}
+        }
+      }
+
+      usage = %{input_tokens: 50, output_tokens: 25, total_tokens: 75}
+
+      assert :ok =
+               StreamHandler.handle_stream(
+                 conv.stream_id,
+                 [%{role: :user, content: "test"}],
+                 llm_model: llm_model,
+                 user_id: user.id,
+                 conversation_id: conv.id,
+                 stream_fn: fn _model_id, _msgs, _cb, _opts ->
+                   {:ok, "ok", [], usage}
+                 end
+               )
+
+      records = Liteskill.Repo.all(UsageRecord)
+      assert length(records) == 1
+      assert hd(records).model_id == "claude-custom"
+    end
+
+    test "calculates costs from model rates when API returns no costs", %{
+      user: user,
+      conversation: conv
+    } do
+      llm_model = %Liteskill.LlmModels.LlmModel{
+        model_id: "claude-rated",
+        input_cost_per_million: Decimal.new("3"),
+        output_cost_per_million: Decimal.new("15"),
+        provider: %Liteskill.LlmProviders.LlmProvider{
+          provider_type: "anthropic",
+          api_key: "test-key",
+          provider_config: %{}
+        }
+      }
+
+      usage = %{input_tokens: 1_000_000, output_tokens: 500_000, total_tokens: 1_500_000}
+
+      assert :ok =
+               StreamHandler.handle_stream(
+                 conv.stream_id,
+                 [%{role: :user, content: "test"}],
+                 llm_model: llm_model,
+                 user_id: user.id,
+                 conversation_id: conv.id,
+                 stream_fn: fn _model_id, _msgs, _cb, _opts ->
+                   {:ok, "ok", [], usage}
+                 end
+               )
+
+      records = Liteskill.Repo.all(UsageRecord)
+      assert length(records) == 1
+
+      record = hd(records)
+      assert Decimal.equal?(record.input_cost, Decimal.new("3"))
+      assert Decimal.equal?(record.output_cost, Decimal.new("7.5"))
+      assert Decimal.equal?(record.total_cost, Decimal.new("10.5"))
+    end
+
+    test "prefers API costs over model rates", %{user: user, conversation: conv} do
+      llm_model = %Liteskill.LlmModels.LlmModel{
+        model_id: "claude-rated",
+        input_cost_per_million: Decimal.new("3"),
+        output_cost_per_million: Decimal.new("15"),
+        provider: %Liteskill.LlmProviders.LlmProvider{
+          provider_type: "anthropic",
+          api_key: "test-key",
+          provider_config: %{}
+        }
+      }
+
+      usage = %{
+        input_tokens: 100,
+        output_tokens: 50,
+        total_tokens: 150,
+        input_cost: 0.001,
+        output_cost: 0.002,
+        total_cost: 0.003
+      }
+
+      assert :ok =
+               StreamHandler.handle_stream(
+                 conv.stream_id,
+                 [%{role: :user, content: "test"}],
+                 llm_model: llm_model,
+                 user_id: user.id,
+                 conversation_id: conv.id,
+                 stream_fn: text_stream_fn_with_usage("Hello!", usage)
+               )
+
+      records = Liteskill.Repo.all(UsageRecord)
+      assert length(records) == 1
+
+      record = hd(records)
+      assert Decimal.equal?(record.total_cost, Decimal.from_float(0.003))
     end
   end
 

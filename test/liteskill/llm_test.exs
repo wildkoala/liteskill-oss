@@ -1,9 +1,10 @@
 defmodule Liteskill.LLMTest do
-  use ExUnit.Case, async: true
+  use Liteskill.DataCase, async: false
 
   alias Liteskill.LLM
   alias Liteskill.LlmModels.LlmModel
   alias Liteskill.LlmProviders.LlmProvider
+  alias Liteskill.Usage.UsageRecord
 
   setup do
     Application.put_env(:liteskill, Liteskill.LLM, bedrock_region: "us-east-1")
@@ -179,6 +180,107 @@ defmodule Liteskill.LLMTest do
 
     assert_raise RuntimeError, ~r/No model specified/, fn ->
       LLM.complete(messages, generate_fn: fn _, _, _ -> {:ok, fake_response("ok")} end)
+    end
+  end
+
+  describe "usage recording in complete/2" do
+    setup do
+      {:ok, user} =
+        Liteskill.Accounts.find_or_create_from_oidc(%{
+          email: "llm-usage-#{System.unique_integer([:positive])}@example.com",
+          name: "LLM Usage Test",
+          oidc_sub: "llm-usage-#{System.unique_integer([:positive])}",
+          oidc_issuer: "https://test.example.com"
+        })
+
+      %{user: user}
+    end
+
+    test "records usage when user_id is provided", %{user: user} do
+      messages = [%{role: :user, content: "Hello"}]
+
+      assert {:ok, _} =
+               LLM.complete(messages,
+                 model_id: "test-model",
+                 user_id: user.id,
+                 generate_fn: fake_generate("Hi")
+               )
+
+      records = Repo.all(UsageRecord)
+      assert length(records) == 1
+
+      record = hd(records)
+      assert record.user_id == user.id
+      assert record.model_id == "test-model"
+      assert record.call_type == "complete"
+      assert record.input_tokens == 10
+      assert record.output_tokens == 5
+    end
+
+    test "does not record usage when user_id is not provided" do
+      messages = [%{role: :user, content: "Hello"}]
+
+      assert {:ok, _} =
+               LLM.complete(messages,
+                 model_id: "test-model",
+                 generate_fn: fake_generate("Hi")
+               )
+
+      assert Repo.all(UsageRecord) == []
+    end
+
+    test "does not record usage on error", %{user: user} do
+      messages = [%{role: :user, content: "Hello"}]
+
+      generate_fn = fn _model, _context, _opts ->
+        {:error, %{status: 500, body: "fail"}}
+      end
+
+      assert {:error, _} =
+               LLM.complete(messages,
+                 model_id: "test-model",
+                 user_id: user.id,
+                 generate_fn: generate_fn
+               )
+
+      assert Repo.all(UsageRecord) == []
+    end
+
+    test "calculates costs from model rates when API returns no costs", %{user: user} do
+      messages = [%{role: :user, content: "Hello"}]
+
+      llm_model = %Liteskill.LlmModels.LlmModel{
+        model_id: "claude-rated",
+        input_cost_per_million: Decimal.new("3"),
+        output_cost_per_million: Decimal.new("15"),
+        provider: %Liteskill.LlmProviders.LlmProvider{
+          provider_type: "anthropic",
+          api_key: "test-key",
+          provider_config: %{}
+        }
+      }
+
+      generate_fn = fn _model, _context, _opts ->
+        {:ok, fake_response("Hi")}
+      end
+
+      assert {:ok, _} =
+               LLM.complete(messages,
+                 model_id: "test-model",
+                 user_id: user.id,
+                 llm_model: llm_model,
+                 generate_fn: generate_fn
+               )
+
+      records = Repo.all(UsageRecord)
+      assert length(records) == 1
+
+      record = hd(records)
+      # 10 input tokens * 3 / 1M = 0.00003
+      assert Decimal.equal?(record.input_cost, Decimal.new("0.00003"))
+      # 5 output tokens * 15 / 1M = 0.000075
+      assert Decimal.equal?(record.output_cost, Decimal.new("0.000075"))
+      assert Decimal.equal?(record.total_cost, Decimal.new("0.000105"))
     end
   end
 end

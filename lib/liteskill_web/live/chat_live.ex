@@ -9,6 +9,7 @@ defmodule LiteskillWeb.ChatLive do
   alias Liteskill.Repo
   alias LiteskillWeb.ChatComponents
   alias LiteskillWeb.McpComponents
+  alias LiteskillWeb.AdminLive
   alias LiteskillWeb.ProfileLive
   alias LiteskillWeb.{PipelineComponents, PipelineLive}
   alias LiteskillWeb.{ReportComponents, ReportsLive}
@@ -128,12 +129,16 @@ defmodule LiteskillWeb.ChatLive do
        sharing_error: nil,
        # LLM model selection
        available_llm_models: available_llm_models,
-       selected_llm_model_id: selected_llm_model_id
+       selected_llm_model_id: selected_llm_model_id,
+       # Conversation usage modal
+       show_usage_modal: false,
+       usage_modal_data: nil
      )
      |> assign(WikiLive.wiki_assigns())
      |> assign(ReportsLive.reports_assigns())
      |> assign(PipelineLive.pipeline_assigns())
      |> assign(AgentStudioLive.studio_assigns())
+     |> assign(AdminLive.admin_assigns())
      |> assign(ProfileLive.profile_assigns()), layout: {LiteskillWeb.Layouts, :chat}}
   end
 
@@ -156,10 +161,24 @@ defmodule LiteskillWeb.ChatLive do
     push_event(socket, "set-accent", %{color: color})
   end
 
+  defp apply_action(socket, action, _params) when action in [:info, :password] do
+    maybe_unsubscribe(socket)
+
+    socket
+    |> assign(
+      conversation: nil,
+      messages: [],
+      streaming: false,
+      stream_content: "",
+      pending_tool_calls: [],
+      wiki_sidebar_tree: []
+    )
+    |> ProfileLive.apply_profile_action(action, socket.assigns.current_user)
+  end
+
   defp apply_action(socket, action, _params)
        when action in [
-              :info,
-              :password,
+              :admin_usage,
               :admin_servers,
               :admin_users,
               :admin_groups,
@@ -177,7 +196,7 @@ defmodule LiteskillWeb.ChatLive do
       pending_tool_calls: [],
       wiki_sidebar_tree: []
     )
-    |> ProfileLive.apply_profile_action(action, socket.assigns.current_user)
+    |> AdminLive.apply_admin_action(action, socket.assigns.current_user)
   end
 
   defp apply_action(socket, :index, _params) do
@@ -618,6 +637,24 @@ defmodule LiteskillWeb.ChatLive do
             ]}
           >
             <.icon name="hero-clock-micro" class="size-4" /> Schedules
+          </.link>
+        </div>
+
+        <div
+          :if={Liteskill.Accounts.User.admin?(@current_user)}
+          class="p-2 border-t border-base-300 min-w-64"
+        >
+          <.link
+            navigate={~p"/admin"}
+            class={[
+              "flex items-center gap-2 w-full px-3 py-2 rounded-lg text-sm transition-colors",
+              if(AdminLive.admin_action?(@live_action),
+                do: "bg-primary/10 text-primary font-medium",
+                else: "hover:bg-base-200 text-base-content/70"
+              )
+            ]}
+          >
+            <.icon name="hero-cog-6-tooth-micro" class="size-4" /> Admin
           </.link>
         </div>
 
@@ -1499,6 +1536,13 @@ defmodule LiteskillWeb.ChatLive do
             password_form={@password_form}
             password_error={@password_error}
             password_success={@password_success}
+          />
+        <% end %>
+        <%= if AdminLive.admin_action?(@live_action) do %>
+          <AdminLive.admin_panel
+            live_action={@live_action}
+            current_user={@current_user}
+            sidebar_open={@sidebar_open}
             profile_users={@profile_users}
             profile_groups={@profile_groups}
             group_detail={@group_detail}
@@ -1513,6 +1557,8 @@ defmodule LiteskillWeb.ChatLive do
             server_settings={@server_settings}
             invitations={@invitations}
             new_invitation_url={@new_invitation_url}
+            admin_usage_data={@admin_usage_data}
+            admin_usage_period={@admin_usage_period}
           />
         <% end %>
         <%= if @live_action == :conversations do %>
@@ -1723,6 +1769,8 @@ defmodule LiteskillWeb.ChatLive do
             run={@studio_run}
             current_user={@current_user}
             sidebar_open={@sidebar_open}
+            run_usage={@run_usage}
+            run_usage_by_model={@run_usage_by_model}
           />
         <% end %>
         <%!-- Agent Studio: Run Log Detail --%>
@@ -1757,7 +1805,7 @@ defmodule LiteskillWeb.ChatLive do
             sidebar_open={@sidebar_open}
           />
         <% end %>
-        <%= if @live_action not in [:sources, :source_show, :source_document_show, :wiki, :wiki_page_show, :mcp_servers, :reports, :report_show, :conversations, :pipeline, :agents, :agent_new, :agent_show, :agent_edit, :teams, :team_new, :team_show, :team_edit, :runs, :run_new, :run_show, :run_log_show, :schedules, :schedule_new, :schedule_show] and not ProfileLive.profile_action?(@live_action) do %>
+        <%= if @live_action not in [:sources, :source_show, :source_document_show, :wiki, :wiki_page_show, :mcp_servers, :reports, :report_show, :conversations, :pipeline, :agents, :agent_new, :agent_show, :agent_edit, :teams, :team_new, :team_show, :team_edit, :runs, :run_new, :run_show, :run_log_show, :schedules, :schedule_new, :schedule_show] and not ProfileLive.profile_action?(@live_action) and not AdminLive.admin_action?(@live_action) do %>
           <%= if @conversation do %>
             <%!-- Active conversation --%>
             <div class="flex flex-1 min-w-0 overflow-hidden">
@@ -1772,6 +1820,13 @@ defmodule LiteskillWeb.ChatLive do
                       <.icon name="hero-bars-3-micro" class="size-5" />
                     </button>
                     <h1 class="text-lg font-semibold truncate flex-1">{@conversation.title}</h1>
+                    <button
+                      phx-click="show_usage_modal"
+                      class="btn btn-ghost btn-sm btn-square"
+                      title="Usage info"
+                    >
+                      <.icon name="hero-information-circle-micro" class="size-4" />
+                    </button>
                     <button
                       phx-click="open_sharing"
                       phx-value-entity-type="conversation"
@@ -1949,7 +2004,7 @@ defmodule LiteskillWeb.ChatLive do
                   class="text-sm text-warning mt-2 px-1"
                 >
                   No models configured.
-                  <.link navigate={~p"/profile/admin/models"} class="link link-primary">
+                  <.link navigate={~p"/admin/models"} class="link link-primary">
                     Add one in Settings
                   </.link>
                 </p>
@@ -2006,6 +2061,89 @@ defmodule LiteskillWeb.ChatLive do
         current_user_id={@current_user.id}
         error={@sharing_error}
       />
+
+      <ChatComponents.modal
+        id="usage-modal"
+        title="Conversation Usage"
+        show={@show_usage_modal}
+        on_close="close_usage_modal"
+      >
+        <div :if={@usage_modal_data} class="space-y-4">
+          <div class="grid grid-cols-3 gap-3">
+            <div class="text-center p-3 bg-base-200 rounded-lg">
+              <div class="text-xs text-base-content/60">Input Cost</div>
+              <div class="text-lg font-bold">
+                {format_usage_cost(@usage_modal_data.totals.input_cost)}
+              </div>
+            </div>
+            <div class="text-center p-3 bg-base-200 rounded-lg">
+              <div class="text-xs text-base-content/60">Output Cost</div>
+              <div class="text-lg font-bold">
+                {format_usage_cost(@usage_modal_data.totals.output_cost)}
+              </div>
+            </div>
+            <div class="text-center p-3 bg-base-200 rounded-lg">
+              <div class="text-xs text-base-content/60">Total Cost</div>
+              <div class="text-lg font-bold">
+                {format_usage_cost(@usage_modal_data.totals.total_cost)}
+              </div>
+            </div>
+          </div>
+
+          <div class="text-sm text-base-content/60 grid grid-cols-3 gap-3">
+            <div class="text-center">
+              <span class="font-mono">
+                {format_usage_tokens(@usage_modal_data.totals.input_tokens)}
+              </span>
+              <span class="ml-1">in</span>
+            </div>
+            <div class="text-center">
+              <span class="font-mono">
+                {format_usage_tokens(@usage_modal_data.totals.output_tokens)}
+              </span>
+              <span class="ml-1">out</span>
+            </div>
+            <div class="text-center">
+              <span class="font-mono">
+                {format_usage_tokens(@usage_modal_data.totals.total_tokens)}
+              </span>
+              <span class="ml-1">total</span>
+            </div>
+          </div>
+
+          <div :if={@usage_modal_data.by_model != []} class="divider my-2">By Model</div>
+
+          <div :if={@usage_modal_data.by_model != []} class="overflow-x-auto">
+            <table class="table table-sm">
+              <thead>
+                <tr>
+                  <th>Model</th>
+                  <th class="text-right">In Cost</th>
+                  <th class="text-right">Out Cost</th>
+                  <th class="text-right">Total</th>
+                  <th class="text-right">Calls</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr :for={row <- @usage_modal_data.by_model}>
+                  <td class="font-mono text-xs max-w-[200px] truncate">{row.model_id}</td>
+                  <td class="text-right">{format_usage_cost(row.input_cost)}</td>
+                  <td class="text-right">{format_usage_cost(row.output_cost)}</td>
+                  <td class="text-right">{format_usage_cost(row.total_cost)}</td>
+                  <td class="text-right">{row.call_count}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <p
+            :if={@usage_modal_data.by_model == [] && @usage_modal_data.totals.call_count == 0}
+            class="text-center text-base-content/50 py-4"
+          >
+            No usage data for this conversation yet.
+          </p>
+        </div>
+      </ChatComponents.modal>
     </div>
     """
   end
@@ -2849,6 +2987,31 @@ defmodule LiteskillWeb.ChatLive do
     {:noreply, assign(socket, tool_call_modal: nil)}
   end
 
+  @impl true
+  def handle_event("show_usage_modal", _params, socket) do
+    conv = socket.assigns.conversation
+
+    if conv do
+      totals = Liteskill.Usage.usage_by_conversation(conv.id)
+
+      by_model =
+        Liteskill.Usage.usage_summary(conversation_id: conv.id, group_by: :model_id)
+
+      {:noreply,
+       assign(socket,
+         show_usage_modal: true,
+         usage_modal_data: %{totals: totals, by_model: by_model}
+       )}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  @impl true
+  def handle_event("close_usage_modal", _params, socket) do
+    {:noreply, assign(socket, show_usage_modal: false)}
+  end
+
   # --- MCP Server Events ---
 
   @impl true
@@ -3071,15 +3234,23 @@ defmodule LiteskillWeb.ChatLive do
 
   # --- Profile Event Delegation ---
 
-  @profile_events ~w(change_password promote_user demote_user create_group
-    admin_delete_group view_group admin_add_member admin_remove_member set_accent_color
+  @profile_events ~w(change_password set_accent_color)
+
+  def handle_event(event, params, socket) when event in @profile_events do
+    ProfileLive.handle_event(event, params, socket)
+  end
+
+  # --- Admin Event Delegation ---
+
+  @admin_events ~w(admin_usage_period promote_user demote_user create_group
+    admin_delete_group view_group admin_add_member admin_remove_member
     show_temp_password_form cancel_temp_password set_temp_password
     toggle_registration create_invitation revoke_invitation
     new_llm_model cancel_llm_model create_llm_model edit_llm_model update_llm_model delete_llm_model
     new_llm_provider cancel_llm_provider create_llm_provider edit_llm_provider update_llm_provider delete_llm_provider)
 
-  def handle_event(event, params, socket) when event in @profile_events do
-    ProfileLive.handle_event(event, params, socket)
+  def handle_event(event, params, socket) when event in @admin_events do
+    AdminLive.handle_event(event, params, socket)
   end
 
   # --- Sharing Modal Events ---
@@ -3607,6 +3778,9 @@ defmodule LiteskillWeb.ChatLive do
 
     opts = if system_prompt, do: [system: system_prompt], else: []
 
+    # Always pass user_id and conversation_id for usage tracking
+    opts = [{:user_id, user_id}, {:conversation_id, conversation.id} | opts]
+
     # Add tool options if tools are selected
     opts = opts ++ tool_opts
 
@@ -3779,6 +3953,19 @@ defmodule LiteskillWeb.ChatLive do
       edit_auto_confirm_tools: true
     )
   end
+
+  defp format_usage_cost(nil), do: "$0.00"
+  defp format_usage_cost(%Decimal{} = d), do: "$#{Decimal.round(d, 4)}"
+  defp format_usage_cost(_), do: "$0.00"
+
+  defp format_usage_tokens(n) when is_integer(n) and n >= 1_000_000,
+    do: "#{Float.round(n / 1_000_000, 1)}M"
+
+  defp format_usage_tokens(n) when is_integer(n) and n >= 1_000,
+    do: "#{Float.round(n / 1_000, 1)}K"
+
+  defp format_usage_tokens(n) when is_integer(n), do: Integer.to_string(n)
+  defp format_usage_tokens(_), do: "0"
 
   defp display_messages(messages, nil), do: messages
 
