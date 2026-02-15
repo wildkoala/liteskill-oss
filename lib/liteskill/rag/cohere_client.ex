@@ -8,6 +8,8 @@ defmodule Liteskill.Rag.CohereClient do
   alias Liteskill.Rag.EmbeddingRequest
   alias Liteskill.Repo
 
+  require Logger
+
   @embed_model "us.cohere.embed-v4:0"
   @rerank_model "cohere.rerank-v3-5:0"
 
@@ -136,8 +138,9 @@ defmodule Liteskill.Rag.CohereClient do
       try do
         Liteskill.LlmProviders.get_bedrock_credentials()
       rescue
-        # coveralls-ignore-next-line
-        _ -> nil
+        e ->
+          Logger.warning("Failed to resolve DB credentials: #{Exception.message(e)}")
+          nil
       end
 
     case db_creds do

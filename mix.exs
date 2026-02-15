@@ -83,7 +83,7 @@ defmodule Liteskill.MixProject do
       {:oidcc, "~> 3.0"},
       {:argon2_elixir, "~> 4.1"},
       {:jose, "~> 1.11"},
-      {:jido, path: "../jido"},
+      {:jido, "~> 2.0.0-rc"},
       {:excoveralls, "~> 0.18", only: :test},
       {:tidewave, "~> 0.5", only: :dev}
     ]

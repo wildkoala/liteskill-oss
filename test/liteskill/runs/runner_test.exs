@@ -147,8 +147,9 @@ defmodule Liteskill.Runs.RunnerTest do
 
       task = hd(updated.run_tasks)
       assert task.name =~ agent.name
-      # Task stays "running" because complete_task was never reached
-      assert task.status == "running"
+      # Task is marked "failed" by the try/rescue cleanup in run_agent_stage
+      assert task.status == "failed"
+      assert task.error =~ "has no LLM model configured"
     end
 
     test "logs agent start before failure", %{owner: owner} do

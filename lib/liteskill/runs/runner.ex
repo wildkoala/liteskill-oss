@@ -152,30 +152,50 @@ defmodule Liteskill.Runs.Runner do
 
     start_time = System.monotonic_time(:millisecond)
 
-    agent_output = execute_agent(agent, member, handoff, context, run.id)
+    try do
+      agent_output = execute_agent(agent, member, handoff, context, run.id)
 
-    agent_sections = [
-      section("#{stage_name}/Configuration", agent_config_content(agent)),
-      section("#{stage_name}/Analysis", agent_output.analysis),
-      section("#{stage_name}/Output", agent_output.output)
-    ]
+      agent_sections = [
+        section("#{stage_name}/Configuration", agent_config_content(agent)),
+        section("#{stage_name}/Analysis", agent_output.analysis),
+        section("#{stage_name}/Output", agent_output.output)
+      ]
 
-    result = write_sections(report_id, agent_sections, context)
-    duration_ms = System.monotonic_time(:millisecond) - start_time
-    complete_task(task, result, duration_ms, "#{agent.name} (#{role}) completed")
+      result = write_sections(report_id, agent_sections, context)
+      duration_ms = System.monotonic_time(:millisecond) - start_time
+      complete_task(task, result, duration_ms, "#{agent.name} (#{role}) completed")
 
-    log(run.id, "info", "agent_complete", "Completed #{stage_name} in #{duration_ms}ms", %{
-      "agent" => agent.name,
-      "duration_ms" => duration_ms,
-      "output_length" => String.length(agent_output.output),
-      "messages" => agent_output[:messages] || []
-    })
+      log(run.id, "info", "agent_complete", "Completed #{stage_name} in #{duration_ms}ms", %{
+        "agent" => agent.name,
+        "duration_ms" => duration_ms,
+        "output_length" => String.length(agent_output.output),
+        "messages" => agent_output[:messages] || []
+      })
 
-    %{
-      handoff
-      | prior_outputs:
-          handoff.prior_outputs ++ [%{agent: agent.name, role: role, output: agent_output.output}]
-    }
+      %{
+        handoff
+        | prior_outputs:
+            handoff.prior_outputs ++
+              [%{agent: agent.name, role: role, output: agent_output.output}]
+      }
+    rescue
+      e ->
+        duration_ms = System.monotonic_time(:millisecond) - start_time
+
+        Runs.update_task(task.id, %{
+          status: "failed",
+          error: Exception.message(e),
+          duration_ms: duration_ms,
+          completed_at: DateTime.utc_now()
+        })
+
+        log(run.id, "error", "agent_crash", "#{stage_name} crashed: #{Exception.message(e)}", %{
+          "agent" => agent.name,
+          "duration_ms" => duration_ms
+        })
+
+        reraise e, __STACKTRACE__
+    end
   end
 
   defp execute_agent(agent, member, handoff, context, run_id) do
