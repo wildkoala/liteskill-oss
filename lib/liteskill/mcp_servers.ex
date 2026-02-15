@@ -83,6 +83,5 @@ defmodule Liteskill.McpServers do
     end
   end
 
-  defp authorize_owner(%McpServer{user_id: user_id} = server, user_id), do: {:ok, server}
-  defp authorize_owner(_, _), do: {:error, :forbidden}
+  defp authorize_owner(entity, user_id), do: Authorization.authorize_owner(entity, user_id)
 end

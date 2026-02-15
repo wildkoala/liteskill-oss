@@ -186,6 +186,5 @@ defmodule Liteskill.LlmModels do
 
   # --- Private ---
 
-  defp authorize_owner(%LlmModel{user_id: user_id} = model, user_id), do: {:ok, model}
-  defp authorize_owner(_, _), do: {:error, :forbidden}
+  defp authorize_owner(entity, user_id), do: Authorization.authorize_owner(entity, user_id)
 end

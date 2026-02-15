@@ -97,34 +97,50 @@ defmodule Liteskill.Agents do
 
   # --- Tool Management ---
 
-  def add_tool(agent_definition_id, mcp_server_id, tool_name \\ nil) do
-    %AgentTool{}
-    |> AgentTool.changeset(%{
-      agent_definition_id: agent_definition_id,
-      mcp_server_id: mcp_server_id,
-      tool_name: tool_name
-    })
-    |> Repo.insert()
+  def add_tool(agent_definition_id, mcp_server_id, tool_name \\ nil, user_id) do
+    case Repo.get(AgentDefinition, agent_definition_id) do
+      nil ->
+        {:error, :not_found}
+
+      agent ->
+        with {:ok, _agent} <- authorize_owner(agent, user_id) do
+          %AgentTool{}
+          |> AgentTool.changeset(%{
+            agent_definition_id: agent_definition_id,
+            mcp_server_id: mcp_server_id,
+            tool_name: tool_name
+          })
+          |> Repo.insert()
+        end
+    end
   end
 
-  def remove_tool(agent_definition_id, mcp_server_id, tool_name \\ nil) do
-    query =
-      from(at in AgentTool,
-        where:
-          at.agent_definition_id == ^agent_definition_id and
-            at.mcp_server_id == ^mcp_server_id
-      )
+  def remove_tool(agent_definition_id, mcp_server_id, tool_name \\ nil, user_id) do
+    case Repo.get(AgentDefinition, agent_definition_id) do
+      nil ->
+        {:error, :not_found}
 
-    query =
-      if tool_name do
-        where(query, [at], at.tool_name == ^tool_name)
-      else
-        where(query, [at], is_nil(at.tool_name))
-      end
+      agent ->
+        with {:ok, _agent} <- authorize_owner(agent, user_id) do
+          query =
+            from(at in AgentTool,
+              where:
+                at.agent_definition_id == ^agent_definition_id and
+                  at.mcp_server_id == ^mcp_server_id
+            )
 
-    case Repo.one(query) do
-      nil -> {:error, :not_found}
-      tool -> Repo.delete(tool)
+          query =
+            if tool_name do
+              where(query, [at], at.tool_name == ^tool_name)
+            else
+              where(query, [at], is_nil(at.tool_name))
+            end
+
+          case Repo.one(query) do
+            nil -> {:error, :not_found}
+            tool -> Repo.delete(tool)
+          end
+        end
     end
   end
 
@@ -137,6 +153,5 @@ defmodule Liteskill.Agents do
 
   # --- Private ---
 
-  defp authorize_owner(%AgentDefinition{user_id: user_id} = agent, user_id), do: {:ok, agent}
-  defp authorize_owner(_, _), do: {:error, :forbidden}
+  defp authorize_owner(entity, user_id), do: Authorization.authorize_owner(entity, user_id)
 end

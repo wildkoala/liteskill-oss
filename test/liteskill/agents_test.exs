@@ -209,7 +209,7 @@ defmodule Liteskill.AgentsTest do
     end
   end
 
-  describe "add_tool/3 and remove_tool/3 and list_tools/1" do
+  describe "add_tool/4 and remove_tool/4 and list_tools/1" do
     setup %{owner: owner} do
       {:ok, agent} = Agents.create_agent(agent_attrs(owner))
 
@@ -223,39 +223,68 @@ defmodule Liteskill.AgentsTest do
       %{agent: agent, server: server}
     end
 
-    test "adds a tool to an agent", %{agent: agent, server: server} do
-      assert {:ok, tool} = Agents.add_tool(agent.id, server.id, "my_tool")
+    test "adds a tool to an agent", %{owner: owner, agent: agent, server: server} do
+      assert {:ok, tool} = Agents.add_tool(agent.id, server.id, "my_tool", owner.id)
       assert tool.agent_definition_id == agent.id
       assert tool.mcp_server_id == server.id
       assert tool.tool_name == "my_tool"
     end
 
-    test "adds a tool without tool_name", %{agent: agent, server: server} do
-      assert {:ok, tool} = Agents.add_tool(agent.id, server.id)
+    test "adds a tool without tool_name", %{owner: owner, agent: agent, server: server} do
+      assert {:ok, tool} = Agents.add_tool(agent.id, server.id, nil, owner.id)
       assert tool.tool_name == nil
     end
 
-    test "lists tools for an agent", %{agent: agent, server: server} do
-      {:ok, _} = Agents.add_tool(agent.id, server.id, "tool_a")
+    test "lists tools for an agent", %{owner: owner, agent: agent, server: server} do
+      {:ok, _} = Agents.add_tool(agent.id, server.id, "tool_a", owner.id)
       tools = Agents.list_tools(agent.id)
       assert length(tools) == 1
       assert hd(tools).tool_name == "tool_a"
     end
 
-    test "removes a tool with tool_name", %{agent: agent, server: server} do
-      {:ok, _} = Agents.add_tool(agent.id, server.id, "removable")
-      assert {:ok, _} = Agents.remove_tool(agent.id, server.id, "removable")
+    test "removes a tool with tool_name", %{owner: owner, agent: agent, server: server} do
+      {:ok, _} = Agents.add_tool(agent.id, server.id, "removable", owner.id)
+      assert {:ok, _} = Agents.remove_tool(agent.id, server.id, "removable", owner.id)
       assert Agents.list_tools(agent.id) == []
     end
 
-    test "removes a tool without tool_name", %{agent: agent, server: server} do
-      {:ok, _} = Agents.add_tool(agent.id, server.id)
-      assert {:ok, _} = Agents.remove_tool(agent.id, server.id)
+    test "removes a tool without tool_name", %{owner: owner, agent: agent, server: server} do
+      {:ok, _} = Agents.add_tool(agent.id, server.id, nil, owner.id)
+      assert {:ok, _} = Agents.remove_tool(agent.id, server.id, nil, owner.id)
       assert Agents.list_tools(agent.id) == []
     end
 
-    test "remove_tool returns not_found for missing tool", %{agent: agent, server: server} do
-      assert {:error, :not_found} = Agents.remove_tool(agent.id, server.id, "nonexistent")
+    test "remove_tool returns not_found for missing tool", %{
+      owner: owner,
+      agent: agent,
+      server: server
+    } do
+      assert {:error, :not_found} =
+               Agents.remove_tool(agent.id, server.id, "nonexistent", owner.id)
+    end
+
+    test "add_tool returns forbidden for non-owner", %{other: other, agent: agent, server: server} do
+      assert {:error, :forbidden} = Agents.add_tool(agent.id, server.id, nil, other.id)
+    end
+
+    test "remove_tool returns forbidden for non-owner", %{
+      owner: owner,
+      other: other,
+      agent: agent,
+      server: server
+    } do
+      {:ok, _} = Agents.add_tool(agent.id, server.id, nil, owner.id)
+      assert {:error, :forbidden} = Agents.remove_tool(agent.id, server.id, nil, other.id)
+    end
+
+    test "add_tool returns not_found for missing agent", %{owner: owner, server: server} do
+      assert {:error, :not_found} =
+               Agents.add_tool(Ecto.UUID.generate(), server.id, nil, owner.id)
+    end
+
+    test "remove_tool returns not_found for missing agent", %{owner: owner, server: server} do
+      assert {:error, :not_found} =
+               Agents.remove_tool(Ecto.UUID.generate(), server.id, nil, owner.id)
     end
   end
 

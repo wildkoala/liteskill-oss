@@ -247,6 +247,17 @@ defmodule Liteskill.Authorization do
     from(e in subquery(union_all(direct, ^group)), select: e.entity_id)
   end
 
+  # --- Struct-Level Ownership Check ---
+
+  @doc """
+  Checks if the given struct is owned by `user_id` (via its `:user_id` field).
+  Returns `{:ok, entity}` if owned, `{:error, :forbidden}` otherwise.
+
+  Use this in context modules to avoid duplicating authorize_owner/2.
+  """
+  def authorize_owner(%{user_id: owner_id} = entity, owner_id), do: {:ok, entity}
+  def authorize_owner(%{user_id: _}, _user_id), do: {:error, :forbidden}
+
   # --- Ownership Verification ---
 
   @schema_map %{

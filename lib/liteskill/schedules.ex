@@ -110,6 +110,5 @@ defmodule Liteskill.Schedules do
 
   # --- Private ---
 
-  defp authorize_owner(%Schedule{user_id: user_id} = schedule, user_id), do: {:ok, schedule}
-  defp authorize_owner(_, _), do: {:error, :forbidden}
+  defp authorize_owner(entity, user_id), do: Authorization.authorize_owner(entity, user_id)
 end

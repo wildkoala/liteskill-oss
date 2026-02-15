@@ -171,6 +171,5 @@ defmodule Liteskill.LlmProviders do
 
   # --- Private ---
 
-  defp authorize_owner(%LlmProvider{user_id: user_id} = provider, user_id), do: {:ok, provider}
-  defp authorize_owner(_, _), do: {:error, :forbidden}
+  defp authorize_owner(entity, user_id), do: Authorization.authorize_owner(entity, user_id)
 end

@@ -478,7 +478,7 @@ defmodule LiteskillWeb.AgentStudioLive do
   def handle_studio_event("add_agent_tool", %{"server_id" => server_id}, socket) do
     agent = socket.assigns.editing_agent
 
-    case Agents.add_tool(agent.id, server_id) do
+    case Agents.add_tool(agent.id, server_id, nil, socket.assigns.current_user.id) do
       {:ok, _tool} ->
         {:ok, agent} = Agents.get_agent(agent.id, socket.assigns.current_user.id)
         available = compute_available_servers(socket.assigns.current_user.id, agent)
@@ -517,7 +517,7 @@ defmodule LiteskillWeb.AgentStudioLive do
   def handle_studio_event("remove_agent_tool", %{"server_id" => server_id}, socket) do
     agent = socket.assigns.editing_agent
 
-    case Agents.remove_tool(agent.id, server_id) do
+    case Agents.remove_tool(agent.id, server_id, nil, socket.assigns.current_user.id) do
       {:ok, _} ->
         {:ok, agent} = Agents.get_agent(agent.id, socket.assigns.current_user.id)
         available = compute_available_servers(socket.assigns.current_user.id, agent)
@@ -652,15 +652,21 @@ defmodule LiteskillWeb.AgentStudioLive do
 
   def handle_studio_event("start_run", %{"id" => id}, socket) do
     user_id = socket.assigns.current_user.id
+    run = socket.assigns.studio_run
 
-    Task.Supervisor.start_child(Liteskill.TaskSupervisor, fn ->
-      Runner.run(id, user_id)
-    end)
+    if run.status != "pending" do
+      {:noreply,
+       Phoenix.LiveView.put_flash(socket, :error, "Run can only be started when pending")}
+    else
+      Task.Supervisor.start_child(Liteskill.TaskSupervisor, fn ->
+        Runner.run(id, user_id)
+      end)
 
-    {:noreply,
-     socket
-     |> Phoenix.LiveView.put_flash(:info, "Run started. Refresh to see results.")
-     |> Phoenix.Component.assign(studio_run: %{socket.assigns.studio_run | status: "running"})}
+      {:noreply,
+       socket
+       |> Phoenix.LiveView.put_flash(:info, "Run started. Refresh to see results.")
+       |> Phoenix.Component.assign(studio_run: %{run | status: "running"})}
+    end
   end
 
   def handle_studio_event("rerun", %{"id" => id}, socket) do
@@ -689,6 +695,24 @@ defmodule LiteskillWeb.AgentStudioLive do
     else
       {:error, _} ->
         {:noreply, Phoenix.LiveView.put_flash(socket, :error, "Could not rerun")}
+    end
+  end
+
+  def handle_studio_event("cancel_run", %{"id" => id}, socket) do
+    user_id = socket.assigns.current_user.id
+
+    case Runs.cancel_run(id, user_id) do
+      {:ok, run} ->
+        {:noreply,
+         socket
+         |> Phoenix.LiveView.put_flash(:info, "Run cancelled")
+         |> Phoenix.Component.assign(studio_run: Runs.get_run!(run.id))}
+
+      {:error, :not_running} ->
+        {:noreply, Phoenix.LiveView.put_flash(socket, :error, "Run is not running")}
+
+      {:error, _} ->
+        {:noreply, Phoenix.LiveView.put_flash(socket, :error, "Could not cancel run")}
     end
   end
 

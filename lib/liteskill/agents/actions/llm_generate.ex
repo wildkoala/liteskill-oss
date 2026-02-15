@@ -115,14 +115,16 @@ defmodule Liteskill.Agents.Actions.LlmGenerate do
 
   # -- LLM call with tool loop --
 
-  defp llm_call_loop(_model, _system, _context, state, _max, round) when round >= 10 do
-    Logger.warning("Max tool rounds exceeded for agent '#{state[:agent_name]}'")
+  defp llm_call_loop(_model, _system, _context, state, max_rounds, round)
+       when round >= max_rounds do
+    Logger.warning("Max tool rounds (#{max_rounds}) exceeded for agent '#{state[:agent_name]}'")
     {:error, :max_tool_rounds_exceeded}
   end
 
   defp llm_call_loop(llm_model, system_prompt, llm_context, state, max_rounds, round)
        when round < max_rounds do
     {model_spec, req_opts} = Liteskill.LlmModels.build_provider_options(llm_model)
+    req_opts = Keyword.merge(req_opts, Application.get_env(:liteskill, :test_req_opts, []))
 
     req_opts = Keyword.put(req_opts, :system_prompt, system_prompt)
 
@@ -172,10 +174,16 @@ defmodule Liteskill.Agents.Actions.LlmGenerate do
   # -- Tool call normalization --
 
   defp normalize_tool_call(tc) do
+    input =
+      case Jason.decode(tc.function.arguments) do
+        {:ok, decoded} -> decoded
+        {:error, _} -> %{"_raw" => tc.function.arguments}
+      end
+
     %{
       tool_use_id: tc.id,
       name: tc.function.name,
-      input: Jason.decode!(tc.function.arguments)
+      input: input
     }
   end
 

@@ -136,6 +136,5 @@ defmodule Liteskill.Teams do
 
   # --- Private ---
 
-  defp authorize_owner(%TeamDefinition{user_id: user_id} = team, user_id), do: {:ok, team}
-  defp authorize_owner(_, _), do: {:error, :forbidden}
+  defp authorize_owner(entity, user_id), do: Authorization.authorize_owner(entity, user_id)
 end

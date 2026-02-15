@@ -64,6 +64,23 @@ defmodule Liteskill.Runs do
     end
   end
 
+  def cancel_run(id, user_id) do
+    case Repo.get(Run, id) do
+      nil ->
+        {:error, :not_found}
+
+      %Run{status: "running"} = run ->
+        with {:ok, run} <- authorize_owner(run, user_id) do
+          run
+          |> Run.changeset(%{status: "cancelled", completed_at: DateTime.utc_now()})
+          |> Repo.update()
+        end
+
+      %Run{} ->
+        {:error, :not_running}
+    end
+  end
+
   # --- Queries ---
 
   def list_runs(user_id) do
@@ -146,6 +163,5 @@ defmodule Liteskill.Runs do
 
   # --- Private ---
 
-  defp authorize_owner(%Run{user_id: user_id} = run, user_id), do: {:ok, run}
-  defp authorize_owner(_, _), do: {:error, :forbidden}
+  defp authorize_owner(entity, user_id), do: Authorization.authorize_owner(entity, user_id)
 end

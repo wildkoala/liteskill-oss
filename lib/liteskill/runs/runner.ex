@@ -19,27 +19,41 @@ defmodule Liteskill.Runs.Runner do
   Runs a run asynchronously. Call from Task.Supervisor.
 
   Updates run status to running, executes the prompt, produces a report,
-  and marks the run completed (or failed).
+  and marks the run completed (or failed). Enforces `timeout_ms` from the run config.
   """
   def run(run_id, user_id) do
     with {:ok, run} <- Runs.get_run(run_id, user_id),
          {:ok, run} <- mark_running(run, user_id) do
-      log(run.id, "info", "init", "Run started")
+      log(run.id, "info", "init", "Run started (timeout: #{run.timeout_ms}ms)")
 
-      try do
-        result = execute(run, user_id)
-        finalize(run, user_id, result)
-      rescue
-        e ->
-          Logger.error("Run runner crashed: #{Exception.message(e)}")
+      task =
+        Task.Supervisor.async_nolink(Liteskill.TaskSupervisor, fn ->
+          execute(run, user_id)
+        end)
 
-          log(run.id, "error", "crash", Exception.message(e), %{
-            "stacktrace" => Exception.format_stacktrace(__STACKTRACE__)
-          })
+      case Task.yield(task, run.timeout_ms) || Task.shutdown(task, :brutal_kill) do
+        {:ok, result} ->
+          finalize(run, user_id, result)
+
+        {:exit, reason} ->
+          Logger.error("Run runner crashed: #{inspect(reason)}")
+
+          log(run.id, "error", "crash", inspect(reason))
 
           Runs.update_run(run.id, user_id, %{
             status: "failed",
-            error: Exception.message(e),
+            error: inspect(reason),
+            completed_at: DateTime.utc_now()
+          })
+
+        nil ->
+          Logger.warning("Run #{run.id} timed out after #{run.timeout_ms}ms")
+
+          log(run.id, "error", "timeout", "Run timed out after #{run.timeout_ms}ms")
+
+          Runs.update_run(run.id, user_id, %{
+            status: "failed",
+            error: "Timed out after #{run.timeout_ms}ms",
             completed_at: DateTime.utc_now()
           })
       end
@@ -218,11 +232,15 @@ defmodule Liteskill.Runs.Runner do
     end
   end
 
+  @max_prior_context_chars 8_000
+
   defp format_prior_context([]), do: ""
 
   defp format_prior_context(outputs) do
-    Enum.map_join(outputs, "\n", fn %{agent: name, role: role} ->
-      "- **#{name}** (#{role}): completed"
+    Enum.map_join(outputs, "\n\n", fn %{agent: name, role: role, output: output} ->
+      truncated = String.slice(output || "", 0, @max_prior_context_chars)
+
+      "--- #{name} (#{role}) ---\n#{truncated}"
     end)
   end
 

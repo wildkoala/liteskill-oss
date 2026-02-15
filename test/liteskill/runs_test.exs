@@ -150,6 +150,41 @@ defmodule Liteskill.RunsTest do
     end
   end
 
+  describe "cancel_run/2" do
+    test "cancels a running run", %{owner: owner} do
+      {:ok, run} = Runs.create_run(run_attrs(owner))
+      {:ok, run} = Runs.update_run(run.id, owner.id, %{status: "running"})
+
+      assert {:ok, cancelled} = Runs.cancel_run(run.id, owner.id)
+      assert cancelled.status == "cancelled"
+      assert cancelled.completed_at != nil
+    end
+
+    test "returns not_running for pending run", %{owner: owner} do
+      {:ok, run} = Runs.create_run(run_attrs(owner))
+
+      assert {:error, :not_running} = Runs.cancel_run(run.id, owner.id)
+    end
+
+    test "returns not_running for completed run", %{owner: owner} do
+      {:ok, run} = Runs.create_run(run_attrs(owner))
+      {:ok, run} = Runs.update_run(run.id, owner.id, %{status: "completed"})
+
+      assert {:error, :not_running} = Runs.cancel_run(run.id, owner.id)
+    end
+
+    test "returns not_found for missing run", %{owner: owner} do
+      assert {:error, :not_found} = Runs.cancel_run(Ecto.UUID.generate(), owner.id)
+    end
+
+    test "returns forbidden for non-owner", %{owner: owner, other: other} do
+      {:ok, run} = Runs.create_run(run_attrs(owner))
+      {:ok, _run} = Runs.update_run(run.id, owner.id, %{status: "running"})
+
+      assert {:error, :forbidden} = Runs.cancel_run(run.id, other.id)
+    end
+  end
+
   describe "list_runs/1" do
     test "lists user's own runs", %{owner: owner} do
       {:ok, r1} = Runs.create_run(run_attrs(owner))
