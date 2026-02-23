@@ -2,8 +2,6 @@ x-app-env: &app-env
   DATABASE_URL: "ecto://${POSTGRES_USER:-liteskill}:${POSTGRES_PASSWORD:-liteskill}@db/${POSTGRES_DB:-liteskill}"
   SECRET_KEY_BASE: "${SECRET_KEY_BASE:?SECRET_KEY_BASE is required. Generate with: openssl rand -base64 64}"
   ENCRYPTION_KEY: "${ENCRYPTION_KEY:?ENCRYPTION_KEY is required. Generate with: openssl rand -base64 32}"
-  AWS_BEARER_TOKEN_BEDROCK: "${AWS_BEARER_TOKEN_BEDROCK:?AWS_BEARER_TOKEN_BEDROCK is required. Set this to your AWS Bedrock bearer token for LLM access.}"
-  AWS_REGION: "${AWS_REGION:?AWS_REGION is required. Set this to your AWS region (e.g. us-east-1).}"
 
 services:
   db:

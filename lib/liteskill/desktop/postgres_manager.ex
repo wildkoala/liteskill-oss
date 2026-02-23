@@ -174,9 +174,11 @@ defmodule Liteskill.Desktop.PostgresManager do
       end
     end
 
+    ext = if :os.type() == {:unix, :darwin}, do: "dylib", else: "so"
+
     for lib <- ~w(plpgsql vector) do
-      found = Enum.any?(lib_dirs, &File.exists?(Path.join(&1, "#{lib}.so")))
-      Logger.info("[PostgresManager] #{lib}.so found=#{found}")
+      found = Enum.any?(lib_dirs, &File.exists?(Path.join(&1, "#{lib}.#{ext}")))
+      Logger.info("[PostgresManager] #{lib}.#{ext} found=#{found}")
     end
 
     :ok
@@ -209,8 +211,11 @@ defmodule Liteskill.Desktop.PostgresManager do
   defp ensure_pg_config(state) do
     conf_path = Path.join(state.data_dir, "postgresql.conf")
     lib_dir = pg_lib_dir(state)
+    ext_dir = pg_extension_dir(state)
     marker = "# -- PostgresManager managed settings --"
-    managed_block = "#{marker}\ndynamic_library_path = '#{lib_dir}'\n"
+
+    managed_block =
+      "#{marker}\ndynamic_library_path = '#{lib_dir}'\nextension_control_path = '#{ext_dir}'\n"
 
     if File.exists?(conf_path) do
       contents = File.read!(conf_path)
@@ -220,7 +225,7 @@ defmodule Liteskill.Desktop.PostgresManager do
           # Replace existing managed block
           String.replace(
             contents,
-            ~r/#{Regex.escape(marker)}\n.*\n/,
+            ~r/#{Regex.escape(marker)}\n(?:.*\n)*/,
             managed_block
           )
         else
@@ -269,7 +274,18 @@ defmodule Liteskill.Desktop.PostgresManager do
   # coveralls-ignore-stop
 
   defp process_alive?(pid_str, _state) do
-    File.exists?("/proc/#{pid_str}")
+    case Integer.parse(pid_str) do
+      {pid, _} ->
+        # kill -0 checks if process exists without sending a signal.
+        # Works on both Linux and macOS (unlike /proc which is Linux-only).
+        {_, code} = System.cmd("kill", ["-0", to_string(pid)], stderr_to_stdout: true)
+        code == 0
+
+      # coveralls-ignore-start — PG always writes a numeric PID
+      :error ->
+        false
+        # coveralls-ignore-stop
+    end
   end
 
   defp start_postgres(state) do
@@ -298,30 +314,32 @@ defmodule Liteskill.Desktop.PostgresManager do
     log_file = Path.join(state.data_dir, "postgresql.log")
     socket_options = pg_socket_options(state)
 
+    # LC_ALL=C prevents macOS's locale subsystem from spawning helper threads
+    # during setlocale(). PG 18 aborts with "postmaster became multithreaded
+    # during startup" if it detects threads before it's ready.
     case state.cmd_fn.(
            pg_ctl,
            ["start", "-D", state.data_dir, "-l", log_file, "-w", "-o", socket_options],
-           stderr_to_stdout: true
+           stderr_to_stdout: true,
+           env: [{"LC_ALL", "C"}]
          ) do
       {_output, 0} -> :ok
       {output, code} -> {:error, {:pg_ctl_start_failed, code, output}}
     end
   end
 
-  defp pg_socket_options(%__MODULE__{windows?: true, port: port} = state) do
-    lib_dir = pg_lib_dir(state)
-
+  # PostgreSQL startup options passed via pg_ctl -o. Settings that involve
+  # paths with spaces (dynamic_library_path, extension_control_path) are
+  # written to postgresql.conf by ensure_pg_config instead — pg_ctl passes
+  # -o options through shell word-splitting which breaks quoted paths.
+  defp pg_socket_options(%__MODULE__{windows?: true, port: port}) do
     "-c listen_addresses=localhost -c port=#{port}" <>
-      " -c shared_buffers=128MB -c max_connections=20" <>
-      " -c dynamic_library_path='#{lib_dir}'"
+      " -c shared_buffers=128MB -c max_connections=20"
   end
 
-  defp pg_socket_options(%__MODULE__{socket_dir: socket_dir} = state) do
-    lib_dir = pg_lib_dir(state)
-
-    "-c listen_addresses='' -c unix_socket_directories=#{socket_dir}" <>
-      " -c shared_buffers=128MB -c max_connections=20" <>
-      " -c dynamic_library_path='#{lib_dir}'"
+  defp pg_socket_options(%__MODULE__{socket_dir: socket_dir}) do
+    "-c listen_addresses='' -c unix_socket_directories='#{socket_dir}'" <>
+      " -c shared_buffers=128MB -c max_connections=20"
   end
 
   # Returns colon-separated search path for dynamic_library_path.
@@ -331,6 +349,13 @@ defmodule Liteskill.Desktop.PostgresManager do
     base = bin_dir |> Path.dirname() |> Path.join("lib")
     pkglib = Path.join(base, "postgresql")
     "#{pkglib}:#{base}"
+  end
+
+  # Returns path for extension_control_path GUC (PG 18+).
+  # PG automatically appends /extension to each path component, so this
+  # should return the share/postgresql directory, NOT share/postgresql/extension.
+  defp pg_extension_dir(%__MODULE__{bin_dir: bin_dir}) do
+    bin_dir |> Path.dirname() |> Path.join("share/postgresql")
   end
 
   defp wait_for_ready(state) do

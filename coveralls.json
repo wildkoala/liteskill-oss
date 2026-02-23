@@ -46,6 +46,7 @@
     "lib/liteskill/application.ex",
     "lib/liteskill/release.ex",
     "lib/liteskill/crypto/encrypted_map.ex",
+    "lib/liteskill/desktop.ex",
     "lib/liteskill/usage/usage_record.ex",
     "test/support/",
     "deps/"

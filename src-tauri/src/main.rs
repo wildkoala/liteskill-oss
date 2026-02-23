@@ -253,56 +253,59 @@ fn run_production_mode() {
                 std::process::exit(1);
             }
 
-            if let Err(e) = check_server_started(port) {
-                eprintln!("Server failed to become ready: {e}");
-                kill_sidecar(app.handle());
-                rfd::MessageDialog::new()
-                    .set_title("Liteskill - Startup Error")
-                    .set_description(&format!(
-                        "The application server did not start in time:\n\n{e}\n\nThe application will now exit."
-                    ))
-                    .set_level(rfd::MessageLevel::Error)
-                    .show();
-                std::process::exit(1);
-            }
-
-            // Create the main window pointing at the dynamic port.
-            // Window is NOT defined in tauri.conf.json — we build it here so the
-            // URL reflects whichever port the OS assigned.
-            let url = format!("http://localhost:{port}");
-            if let Err(e) = tauri::WebviewWindowBuilder::new(
-                app,
-                "main",
-                tauri::WebviewUrl::External(url.parse().unwrap()),
-            )
-            .title("Liteskill")
-            .inner_size(1280.0, 900.0)
-            .resizable(true)
-            .on_navigation(|url| {
-                // Allow navigation to localhost only; open anything else in the
-                // system browser so the Tauri webview is never hijacked.
-                match url.host_str() {
-                    Some("localhost") | Some("127.0.0.1") => true,
-                    _ => {
-                        println!("Opening external URL in system browser: {url}");
-                        open_in_system_browser(url.as_str());
-                        false
-                    }
+            // Move the blocking server-readiness check and window creation to a
+            // background thread. On macOS, the setup closure runs inside
+            // applicationDidFinishLaunching: which MUST return quickly — blocking
+            // the main thread causes macOS to terminate the app with SIGABRT.
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                if let Err(e) = check_server_started(port) {
+                    eprintln!("Server failed to become ready: {e}");
+                    kill_sidecar(&handle);
+                    rfd::MessageDialog::new()
+                        .set_title("Liteskill - Startup Error")
+                        .set_description(&format!(
+                            "The application server did not start in time:\n\n{e}\n\nThe application will now exit."
+                        ))
+                        .set_level(rfd::MessageLevel::Error)
+                        .show();
+                    handle.exit(1);
+                    return;
                 }
-            })
-            .build()
-            {
-                eprintln!("Failed to create window: {e}");
-                kill_sidecar(app.handle());
-                rfd::MessageDialog::new()
-                    .set_title("Liteskill - Startup Error")
-                    .set_description(&format!(
-                        "Failed to create the application window:\n\n{e}\n\nThe application will now exit."
-                    ))
-                    .set_level(rfd::MessageLevel::Error)
-                    .show();
-                std::process::exit(1);
-            }
+
+                // Create the main window pointing at the dynamic port.
+                // Window is NOT defined in tauri.conf.json — we build it here so
+                // the URL reflects whichever port the OS assigned.
+                // Tauri handles cross-thread window creation via IPC to the main
+                // thread's event loop, so this is safe from a background thread.
+                let url = format!("http://localhost:{port}");
+                if let Err(e) = tauri::WebviewWindowBuilder::new(
+                    &handle,
+                    "main",
+                    tauri::WebviewUrl::External(url.parse().unwrap()),
+                )
+                .title("Liteskill")
+                .inner_size(1280.0, 900.0)
+                .resizable(true)
+                .on_navigation(|url| {
+                    // Allow navigation to localhost only; open anything else in
+                    // the system browser so the Tauri webview is never hijacked.
+                    match url.host_str() {
+                        Some("localhost") | Some("127.0.0.1") => true,
+                        _ => {
+                            println!("Opening external URL in system browser: {url}");
+                            open_in_system_browser(url.as_str());
+                            false
+                        }
+                    }
+                })
+                .build()
+                {
+                    eprintln!("Failed to create window: {e}");
+                    kill_sidecar(&handle);
+                    handle.exit(1);
+                }
+            });
 
             Ok(())
         })
@@ -337,7 +340,12 @@ fn start_server(app: &tauri::AppHandle, port: u16) -> Result<(), String> {
         .sidecar("desktop")
         .map_err(|e| format!("Failed to set up sidecar: {e}"))?
         .env("LITESKILL_DESKTOP", "true")
-        .env("PORT", port.to_string());
+        .env("PORT", port.to_string())
+        // LC_ALL=C prevents macOS locale subsystem from spawning threads.
+        // PG 18 aborts with "postmaster became multithreaded during startup"
+        // if setlocale() triggers thread creation. Setting it here ensures
+        // ALL child processes (BEAM, pg_ctl, postgres) inherit it.
+        .env("LC_ALL", "C");
 
     let (mut rx, child) = sidecar_command
         .spawn()

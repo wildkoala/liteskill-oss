@@ -22,9 +22,9 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "targets": ["appimage"]
+    "targets": ["app"]
   },
   "identifier": "com.liteskill.desktop",
   "productName": "Liteskill",
-  "version": "0.2.23"
+  "version": "0.2.26"
 }

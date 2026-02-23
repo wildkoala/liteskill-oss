@@ -68,4 +68,6 @@ npm-debug.log
 # appimage build artifacts
 *.AppImage*
 
+# mac
+.DS_Store
 

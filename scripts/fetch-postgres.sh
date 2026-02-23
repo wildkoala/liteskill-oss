@@ -147,6 +147,131 @@ fetch_linux_x86_64() {
   fi
 }
 
+# Scans all Mach-O binaries and dylibs in $OUT_DIR for references to
+# /opt/homebrew, copies those dylibs into $OUT_DIR/lib/, and rewrites the
+# load commands to use @rpath. Recurses to pick up transitive deps.
+# Compatible with bash 3.2 (macOS default).
+bundle_homebrew_dylibs() {
+  log "Bundling Homebrew dylibs for portability..."
+  local seen_file
+  seen_file="$(mktemp)"
+  trap 'rm -f "$seen_file"' RETURN
+
+  # Iteratively discover and bundle Homebrew deps until no new ones are found.
+  # Each pass scans all Mach-O files in OUT_DIR for /opt/homebrew references,
+  # copies any not-yet-seen dylib into lib/, and marks it as seen.
+  local pass=0
+  while true; do
+    pass=$((pass + 1))
+    local found_new=0
+
+    for f in "$OUT_DIR"/bin/* "$OUT_DIR"/lib/*.dylib "$OUT_DIR"/lib/postgresql/*.dylib; do
+      [ -f "$f" ] || continue
+      file "$f" | grep -q "Mach-O" || continue
+
+      # grep || true prevents pipefail from aborting when no matches
+      otool -L "$f" 2>/dev/null | awk '{print $1}' | (grep '^/opt/homebrew' || true) | while read -r dep; do
+        [ -z "$dep" ] && continue
+        local dep_basename
+        dep_basename="$(basename "$dep")"
+        if ! grep -qx "$dep_basename" "$seen_file" 2>/dev/null; then
+          echo "$dep_basename" >> "$seen_file"
+          if [ -f "$dep" ]; then
+            cp -L "$dep" "$OUT_DIR/lib/$dep_basename"
+            chmod 755 "$OUT_DIR/lib/$dep_basename"
+            log "  Bundled $dep_basename"
+            # Signal that we found something new (write marker file)
+            touch "$seen_file.changed"
+          else
+            log "  WARNING: $dep not found (needed by $(basename "$f"))"
+          fi
+        fi
+      done
+    done
+
+    if [ -f "$seen_file.changed" ]; then
+      rm -f "$seen_file.changed"
+    else
+      break
+    fi
+
+    # Safety valve
+    if [ "$pass" -gt 10 ]; then
+      log "  WARNING: Stopping after $pass passes (possible circular deps)"
+      break
+    fi
+  done
+
+  # Rewrite all Homebrew references to @rpath in binaries and dylibs
+  for f in "$OUT_DIR"/bin/* "$OUT_DIR"/lib/*.dylib "$OUT_DIR"/lib/postgresql/*.dylib; do
+    [ -f "$f" ] || continue
+    file "$f" | grep -q "Mach-O" || continue
+
+    otool -L "$f" 2>/dev/null | awk '{print $1}' | (grep '^/opt/homebrew' || true) | while read -r dep; do
+      [ -z "$dep" ] && continue
+      local dep_basename
+      dep_basename="$(basename "$dep")"
+      install_name_tool -change "$dep" "@rpath/$dep_basename" "$f" 2>/dev/null || true
+    done
+
+    # Also fix the install name of dylibs themselves
+    if echo "$f" | grep -q '\.dylib$'; then
+      local current_id
+      current_id="$(otool -D "$f" 2>/dev/null | tail -1)"
+      if echo "$current_id" | grep -q '^/opt/homebrew'; then
+        install_name_tool -id "@rpath/$(basename "$f")" "$f" 2>/dev/null || true
+      fi
+    fi
+  done
+
+  # Add @loader_path rpath to bundled dylibs so they can find each other
+  for f in "$OUT_DIR"/lib/*.dylib; do
+    [ -f "$f" ] || continue
+    install_name_tool -add_rpath "@loader_path" "$f" 2>/dev/null || true
+  done
+
+  # Resolve @loader_path references that point to files not yet bundled.
+  # ICU libraries reference libicudata via @loader_path — when those dylibs
+  # were in Homebrew's lib/ dir they could find it, but in our bundle they need
+  # the actual file present. Find the originals via Homebrew paths.
+  log "Resolving @loader_path references..."
+  for f in "$OUT_DIR"/lib/*.dylib; do
+    [ -f "$f" ] || continue
+    otool -L "$f" 2>/dev/null | awk '{print $1}' | (grep '^@loader_path/' || true) | while read -r dep; do
+      local dep_basename
+      dep_basename="$(echo "$dep" | sed 's|@loader_path/||')"
+      local target_file="$OUT_DIR/lib/$dep_basename"
+      if [ ! -f "$target_file" ]; then
+        # Search Homebrew for the missing dylib
+        local real_path
+        real_path="$(find /opt/homebrew -name "$dep_basename" -not -type d -print -quit 2>/dev/null)"
+        if [ -n "$real_path" ]; then
+          cp -L "$real_path" "$target_file"
+          chmod 755 "$target_file"
+          log "  Bundled $dep_basename (transitive @loader_path dep)"
+        else
+          log "  WARNING: @loader_path dep $dep_basename not found"
+        fi
+      fi
+    done
+  done
+
+  log "Homebrew dylib bundling complete"
+}
+
+# Re-signs all Mach-O files in $OUT_DIR with ad-hoc signatures.
+# Required on Apple Silicon where the kernel kills binaries with invalid
+# code signatures (which install_name_tool modifications invalidate).
+resign_macos_binaries() {
+  log "Re-signing Mach-O binaries..."
+  find "$OUT_DIR" -type f | while read -r f; do
+    if file "$f" | grep -q "Mach-O"; then
+      codesign --force --sign - "$f" 2>/dev/null || true
+    fi
+  done
+  log "Re-signing complete"
+}
+
 fetch_macos() {
   local arch="$1"
   log "Fetching PostgreSQL $PG_MAJOR for macOS ($arch)..."
@@ -170,12 +295,22 @@ fetch_macos() {
   # Build pgvector
   build_pgvector "$pg_prefix/bin/pg_config"
 
+  # Bundle Homebrew dylibs that PG binaries depend on, so the app is portable
+  # to machines without Homebrew. System dylibs (/usr/lib, /System) are fine.
+  bundle_homebrew_dylibs
+
   # Fix dylib rpaths to be portable
   for bin in "$OUT_DIR"/bin/*; do
     if [ -f "$bin" ] && file "$bin" | grep -q "Mach-O"; then
       install_name_tool -add_rpath "@executable_path/../lib" "$bin" 2>/dev/null || true
+      install_name_tool -add_rpath "@executable_path/../lib/postgresql" "$bin" 2>/dev/null || true
     fi
   done
+
+  # Re-sign all Mach-O binaries and dylibs after install_name_tool modifications.
+  # On Apple Silicon, modifying a binary invalidates its code signature, and the
+  # kernel will SIGKILL any binary with an invalid signature.
+  resign_macos_binaries
 }
 
 fetch_windows_x86_64() {

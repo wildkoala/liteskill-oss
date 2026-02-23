@@ -92,7 +92,8 @@ defmodule Liteskill.Desktop.PostgresManagerTest do
 
       assert_receive {:cmd, "initdb", ["-D", _, "-L", _, "--no-locale", "-E", "UTF8"]}
       assert_receive {:cmd, "pg_ctl", ["start", "-D", _, "-l", _, "-w", "-o", options]}
-      assert options =~ "dynamic_library_path"
+      # dynamic_library_path is set via postgresql.conf, not -o flags (spaces in paths)
+      assert options =~ "shared_buffers"
       assert_receive {:cmd, "pg_isready", ["-h", _]}
 
       # patch_libdir: strips $libdir/ from pg_proc.probin in template1 and postgres
@@ -380,6 +381,7 @@ defmodule Liteskill.Desktop.PostgresManagerTest do
 
       contents = File.read!(conf_path)
       assert contents =~ "dynamic_library_path"
+      assert contents =~ "extension_control_path"
       assert contents =~ Path.join(tmp_dir, "lib")
 
       GenServer.stop(pid)
@@ -394,7 +396,7 @@ defmodule Liteskill.Desktop.PostgresManagerTest do
 
       File.write!(
         conf_path,
-        "# PostgreSQL config\n# -- PostgresManager managed settings --\ndynamic_library_path = '/old/path'\n"
+        "# PostgreSQL config\n# -- PostgresManager managed settings --\ndynamic_library_path = '/old/path'\nextension_control_path = '/old/ext'\n"
       )
 
       opts = build_opts(tmp_dir)
@@ -402,6 +404,7 @@ defmodule Liteskill.Desktop.PostgresManagerTest do
 
       contents = File.read!(conf_path)
       refute contents =~ "/old/path"
+      refute contents =~ "/old/ext"
       assert contents =~ Path.join(tmp_dir, "lib")
 
       GenServer.stop(pid)
@@ -445,7 +448,8 @@ defmodule Liteskill.Desktop.PostgresManagerTest do
       assert_receive {:cmd, "pg_ctl.exe", ["start", "-D", _, "-l", _, "-w", "-o", options]}
       assert options =~ "listen_addresses=localhost"
       assert options =~ "port=15432"
-      assert options =~ "dynamic_library_path"
+      # dynamic_library_path is set via postgresql.conf, not -o flags (spaces in paths)
+      assert options =~ "shared_buffers"
       refute options =~ "unix_socket_directories"
 
       GenServer.stop(pid)
@@ -683,9 +687,10 @@ defmodule Liteskill.Desktop.PostgresManagerTest do
       lib_base = Path.join(tmp_dir, "lib")
       lib_pg = Path.join(lib_base, "postgresql")
       File.mkdir_p!(lib_pg)
-      # Place a dummy .so so File.ls returns {:ok, files}
-      File.write!(Path.join(lib_pg, "plpgsql.so"), "")
-      File.write!(Path.join(lib_base, "vector.so"), "")
+      # Place dummy shared libs so File.ls returns {:ok, files}
+      ext = if :os.type() == {:unix, :darwin}, do: "dylib", else: "so"
+      File.write!(Path.join(lib_pg, "plpgsql.#{ext}"), "")
+      File.write!(Path.join(lib_base, "vector.#{ext}"), "")
 
       opts = build_opts(tmp_dir)
       {:ok, pid} = PostgresManager.start_link(opts)
