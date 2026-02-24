@@ -361,7 +361,7 @@ defmodule Liteskill.LLM.StreamHandler do
           {:ok, response} ->
             text = ReqLLM.Response.text(response) || ""
             raw_tool_calls = ReqLLM.Response.tool_calls(response) || []
-            tool_calls = Enum.map(raw_tool_calls, &normalize_tool_call/1)
+            tool_calls = Enum.map(raw_tool_calls, &ToolUtils.normalize_tool_call/1)
             usage = ReqLLM.Response.usage(response)
             {:ok, text, tool_calls, usage}
 
@@ -372,14 +372,6 @@ defmodule Liteskill.LLM.StreamHandler do
       {:error, reason} ->
         {:error, normalize_error(reason)}
     end
-  end
-
-  defp normalize_tool_call(tc) do
-    %{
-      tool_use_id: tc.id,
-      name: tc.function.name,
-      input: Jason.decode!(tc.function.arguments)
-    }
   end
 
   # coveralls-ignore-stop
