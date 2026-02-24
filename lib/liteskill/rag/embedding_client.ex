@@ -44,9 +44,13 @@ defmodule Liteskill.Rag.EmbeddingClient do
           {model_spec, req_opts, model_id} = build_bedrock_options(provider_info, embed_opts)
 
           req_opts =
-            if plug_opt,
-              do: Keyword.put(req_opts, :req_http_options, plug: plug_opt),
-              else: req_opts
+            if plug_opt do
+              req_opts
+              |> Keyword.put(:req_http_options, plug: plug_opt)
+              |> Keyword.put_new(:api_key, "test-plug-credential")
+            else
+              req_opts
+            end
 
           {ReqLLM.embed(model_spec, texts, req_opts), model_id}
       end
