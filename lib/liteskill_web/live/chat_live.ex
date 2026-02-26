@@ -4,12 +4,17 @@ defmodule LiteskillWeb.ChatLive do
   import LiteskillWeb.FormatHelpers, only: [format_cost: 1, format_number: 1]
 
   alias Liteskill.Chat
-  alias Liteskill.Chat.{MessageBuilder, ToolCall}
+  alias Liteskill.Chat.MessageBuilder
   alias Liteskill.LLM.StreamHandler
   alias Liteskill.McpServers
-  alias Liteskill.McpServers.Client, as: McpClient
   alias LiteskillWeb.ChatComponents
   alias LiteskillWeb.McpComponents
+  alias LiteskillWeb.ChatLive.ConversationsHandler
+  alias LiteskillWeb.ChatLive.CostHandler
+  alias LiteskillWeb.ChatLive.EditHandler
+  alias LiteskillWeb.ChatLive.Helpers, as: ChatHelpers
+  alias LiteskillWeb.ChatLive.SourcesHandler
+  alias LiteskillWeb.ChatLive.ToolHandler
   alias LiteskillWeb.{SharingComponents, SharingLive, SourcesComponents}
 
   @impl true
@@ -193,7 +198,8 @@ defmodule LiteskillWeb.ChatLive do
             {conversation, conversation.status == "streaming"}
           end
 
-        pending = if streaming, do: load_pending_tool_calls(conversation.messages), else: []
+        pending =
+          if streaming, do: ToolHandler.load_pending_tool_calls(conversation.messages), else: []
 
         socket =
           socket
@@ -405,7 +411,7 @@ defmodule LiteskillWeb.ChatLive do
                       <.icon name="hero-bars-3-micro" class="size-5" />
                     </button>
                     <h1 class="text-lg font-semibold truncate flex-1">{@conversation.title}</h1>
-                    <.cost_limit_button
+                    <CostHandler.cost_limit_button
                       cost_limit={@cost_limit}
                       cost_limit_input={@cost_limit_input}
                       cost_limit_tokens={@cost_limit_tokens}
@@ -431,7 +437,7 @@ defmodule LiteskillWeb.ChatLive do
                 </header>
 
                 <div id="messages" phx-hook="ScrollBottom" class="flex-1 overflow-y-auto px-4 py-4">
-                  <%= for msg <- display_messages(@messages, @editing_message_id) do %>
+                  <%= for msg <- ChatHelpers.display_messages(@messages, @editing_message_id) do %>
                     <ChatComponents.message_bubble
                       :if={msg.content && msg.content != ""}
                       message={msg}
@@ -527,7 +533,7 @@ defmodule LiteskillWeb.ChatLive do
                       <.icon name="hero-stop-micro" class="size-5" />
                     </button>
                   </.form>
-                  <.model_picker
+                  <CostHandler.model_picker
                     id="model-picker-conversation"
                     class="mt-1"
                     available_llm_models={@available_llm_models}
@@ -585,12 +591,12 @@ defmodule LiteskillWeb.ChatLive do
                   </button>
                 </.form>
                 <div class="flex items-center justify-center gap-2 mt-2">
-                  <.model_picker
+                  <CostHandler.model_picker
                     id="model-picker-new"
                     available_llm_models={@available_llm_models}
                     selected_llm_model_id={@selected_llm_model_id}
                   />
-                  <.cost_limit_button
+                  <CostHandler.cost_limit_button
                     cost_limit={@cost_limit}
                     cost_limit_input={@cost_limit_input}
                     cost_limit_tokens={@cost_limit_tokens}
@@ -745,94 +751,11 @@ defmodule LiteskillWeb.ChatLive do
 
   # --- Sources Sidebar Events ---
 
-  @impl true
-  def handle_event("toggle_sources_sidebar", %{"message-id" => message_id}, socket) do
-    message = Enum.find(socket.assigns.messages, &(&1.id == message_id))
-
-    if message && message.rag_sources not in [nil, []] do
-      if socket.assigns.show_sources_sidebar do
-        {:noreply, assign(socket, show_sources_sidebar: false, sidebar_sources: [])}
-      else
-        {:noreply,
-         assign(socket, show_sources_sidebar: true, sidebar_sources: message.rag_sources)}
-      end
-    else
-      {:noreply, socket}
-    end
-  end
+  @sources_events SourcesHandler.events()
 
   @impl true
-  def handle_event("close_sources_sidebar", _params, socket) do
-    {:noreply, assign(socket, show_sources_sidebar: false, sidebar_sources: [])}
-  end
-
-  @impl true
-  def handle_event("show_source_modal", %{"chunk-id" => chunk_id}, socket) do
-    source = Enum.find(socket.assigns.sidebar_sources, &(&1["chunk_id"] == chunk_id))
-
-    if source do
-      {:noreply, assign(socket, show_source_modal: true, source_modal_data: source)}
-    else
-      {:noreply, socket}
-    end
-  end
-
-  @impl true
-  def handle_event("close_source_modal", _params, socket) do
-    {:noreply, assign(socket, show_source_modal: false)}
-  end
-
-  @impl true
-  def handle_event("show_raw_output_modal", %{"message-id" => message_id}, socket) do
-    message =
-      Enum.find(socket.assigns.messages, fn msg ->
-        msg.id == message_id && msg.role == "assistant"
-      end)
-
-    if message && message.content not in [nil, ""] do
-      {:noreply,
-       assign(socket,
-         show_raw_output_modal: true,
-         raw_output_message_id: message_id,
-         raw_output_content: message.content
-       )}
-    else
-      {:noreply, socket}
-    end
-  end
-
-  @impl true
-  def handle_event("close_raw_output_modal", _params, socket) do
-    {:noreply,
-     assign(socket,
-       show_raw_output_modal: false,
-       raw_output_message_id: nil,
-       raw_output_content: ""
-     )}
-  end
-
-  @impl true
-  def handle_event("raw_output_copied", _params, socket) do
-    {:noreply, put_flash(socket, :info, "Raw output copied")}
-  end
-
-  @impl true
-  def handle_event("show_source", %{"doc-id" => doc_id}, socket) do
-    # Find the source in any assistant message's rag_sources
-    {source, _msg_sources} = find_source_by_doc_id(socket.assigns.messages, doc_id)
-
-    source_data =
-      source || lookup_source_from_db(doc_id, socket.assigns.current_user.id)
-
-    if source_data do
-      {:noreply,
-       assign(socket,
-         show_source_modal: true,
-         source_modal_data: source_data
-       )}
-    else
-      {:noreply, socket}
-    end
+  def handle_event(event, params, socket) when event in @sources_events do
+    SourcesHandler.handle_event(event, params, socket)
   end
 
   @impl true
@@ -859,13 +782,13 @@ defmodule LiteskillWeb.ChatLive do
 
       true ->
         user_id = socket.assigns.current_user.id
-        tool_config = build_tool_config(socket)
+        tool_config = ToolHandler.build_tool_config(socket)
 
         case socket.assigns.conversation do
           nil ->
             create_params = %{
               user_id: user_id,
-              title: truncate_title(content),
+              title: ChatHelpers.truncate_title(content),
               llm_model_id: socket.assigns.selected_llm_model_id
             }
 
@@ -910,143 +833,13 @@ defmodule LiteskillWeb.ChatLive do
     end
   end
 
-  @impl true
-  def handle_event("confirm_delete_conversation", %{"id" => id}, socket) do
-    {:noreply, assign(socket, confirm_delete_id: id)}
-  end
-
-  @impl true
-  def handle_event("cancel_delete_conversation", _params, socket) do
-    {:noreply, assign(socket, confirm_delete_id: nil)}
-  end
-
-  @impl true
-  def handle_event("delete_conversation", _params, socket) do
-    user_id = socket.assigns.current_user.id
-    id = socket.assigns.confirm_delete_id
-
-    case Chat.archive_conversation(id, user_id) do
-      {:ok, _} ->
-        conversations = Chat.list_conversations(user_id)
-        socket = assign(socket, conversations: conversations, confirm_delete_id: nil)
-
-        if socket.assigns.live_action == :conversations do
-          {:noreply, refresh_managed_conversations(socket)}
-        else
-          {:noreply, push_navigate(socket, to: ~p"/")}
-        end
-
-      {:error, reason} ->
-        {:noreply,
-         socket
-         |> assign(confirm_delete_id: nil)
-         |> put_flash(:error, action_error("delete conversation", reason))}
-    end
-  end
-
   # --- Conversations Management Events ---
 
-  @impl true
-  def handle_event("conversations_search", %{"search" => search}, socket) do
-    search_term = String.trim(search)
-    user_id = socket.assigns.current_user.id
-    page_size = socket.assigns.conversations_page_size
-    opts = if search_term != "", do: [search: search_term], else: []
-
-    managed = Chat.list_conversations(user_id, [limit: page_size, offset: 0] ++ opts)
-    total = Chat.count_conversations(user_id, opts)
-
-    {:noreply,
-     assign(socket,
-       managed_conversations: managed,
-       conversations_search: search_term,
-       conversations_page: 1,
-       conversations_total: total,
-       conversations_selected: MapSet.new()
-     )}
-  end
+  @conversations_events ConversationsHandler.events()
 
   @impl true
-  def handle_event("conversations_page", %{"page" => page}, socket) do
-    page = safe_page(page)
-    user_id = socket.assigns.current_user.id
-    page_size = socket.assigns.conversations_page_size
-    search = socket.assigns.conversations_search
-    opts = if search != "", do: [search: search], else: []
-
-    offset = (page - 1) * page_size
-    managed = Chat.list_conversations(user_id, [limit: page_size, offset: offset] ++ opts)
-
-    {:noreply,
-     assign(socket,
-       managed_conversations: managed,
-       conversations_page: page,
-       conversations_selected: MapSet.new()
-     )}
-  end
-
-  @impl true
-  def handle_event("toggle_select_conversation", %{"id" => id}, socket) do
-    selected = socket.assigns.conversations_selected
-
-    selected =
-      if MapSet.member?(selected, id),
-        do: MapSet.delete(selected, id),
-        else: MapSet.put(selected, id)
-
-    {:noreply, assign(socket, conversations_selected: selected)}
-  end
-
-  @impl true
-  def handle_event("toggle_select_all_conversations", _params, socket) do
-    all_ids = socket.assigns.managed_conversations |> Enum.map(& &1.id) |> MapSet.new()
-    selected = socket.assigns.conversations_selected
-
-    selected =
-      if MapSet.equal?(selected, all_ids) and MapSet.size(all_ids) > 0,
-        do: MapSet.new(),
-        else: all_ids
-
-    {:noreply, assign(socket, conversations_selected: selected)}
-  end
-
-  @impl true
-  def handle_event("confirm_bulk_archive", _params, socket) do
-    {:noreply, assign(socket, confirm_bulk_delete: true)}
-  end
-
-  @impl true
-  def handle_event("cancel_bulk_archive", _params, socket) do
-    {:noreply, assign(socket, confirm_bulk_delete: false)}
-  end
-
-  @impl true
-  def handle_event("bulk_archive_conversations", _params, socket) do
-    user_id = socket.assigns.current_user.id
-    ids = MapSet.to_list(socket.assigns.conversations_selected)
-    total = length(ids)
-
-    {:ok, archived} = Chat.bulk_archive_conversations(ids, user_id)
-
-    conversations = Chat.list_conversations(user_id)
-
-    socket =
-      socket
-      |> assign(
-        conversations: conversations,
-        confirm_bulk_delete: false,
-        conversations_selected: MapSet.new()
-      )
-      |> refresh_managed_conversations()
-
-    socket =
-      if archived < total do
-        put_flash(socket, :error, "Archived #{archived} of #{total} conversations")
-      else
-        socket
-      end
-
-    {:noreply, socket}
+  def handle_event(event, params, socket) when event in @conversations_events do
+    ConversationsHandler.handle_event(event, params, socket)
   end
 
   @impl true
@@ -1090,325 +883,50 @@ defmodule LiteskillWeb.ChatLive do
 
   # --- Edit Message Events ---
 
+  @edit_events EditHandler.events()
+
   @impl true
-  def handle_event("edit_message", %{"message-id" => message_id}, socket) do
-    message = Enum.find(socket.assigns.messages, &(&1.id == message_id))
+  def handle_event(event, params, socket) when event in @edit_events do
+    EditHandler.handle_event(event, params, socket)
+  end
 
-    if message do
-      server_ids =
-        case message.tool_config do
-          %{"servers" => servers} when is_list(servers) ->
-            servers |> Enum.map(& &1["id"]) |> MapSet.new()
+  @impl true
+  def handle_event("confirm_edit", params, socket) do
+    case EditHandler.handle_confirm_edit(params, socket) do
+      {:stream, socket, conversation, tool_config} ->
+        pid =
+          trigger_llm_stream(conversation, socket.assigns.current_user.id, socket, tool_config)
 
-          _ ->
-            MapSet.new()
-        end
+        {:noreply,
+         assign(socket,
+           streaming: true,
+           stream_content: "",
+           stream_error: nil,
+           pending_tool_calls: [],
+           stream_task_pid: pid
+         )}
 
-      auto_confirm =
-        case message.tool_config do
-          %{"auto_confirm" => val} -> val
-          _ -> true
-        end
-
-      if socket.assigns.available_tools == [] do
-        send(self(), :fetch_tools)
-      end
-
-      {:noreply,
-       assign(socket,
-         editing_message_id: message_id,
-         editing_message_content: message.content,
-         edit_selected_server_ids: server_ids,
-         edit_show_tool_picker: false,
-         edit_auto_confirm_tools: auto_confirm
-       )}
-    else
-      {:noreply, put_flash(socket, :error, "Message not found")}
+      {:noreply, socket} ->
+        {:noreply, socket}
     end
   end
 
-  @impl true
-  def handle_event("cancel_edit", _params, socket) do
-    {:noreply, clear_edit_assigns(socket)}
-  end
+  # --- Cost / Model / Usage Events ---
+
+  @cost_events CostHandler.events()
 
   @impl true
-  def handle_event("confirm_edit", %{"content" => content}, socket) do
-    content = String.trim(content)
-
-    if content == "" do
-      {:noreply, socket}
-    else
-      conversation = socket.assigns.conversation
-      user_id = socket.assigns.current_user.id
-      message_id = socket.assigns.editing_message_id
-      tool_config = build_edit_tool_config(socket)
-
-      case Chat.edit_message(conversation.id, user_id, message_id, content,
-             tool_config: tool_config
-           ) do
-        {:ok, _message} ->
-          {:ok, updated_conv} = Chat.get_conversation(conversation.id, user_id)
-          pid = trigger_llm_stream(updated_conv, user_id, socket, tool_config)
-
-          {:noreply,
-           socket
-           |> clear_edit_assigns()
-           |> assign(
-             conversation: updated_conv,
-             messages: updated_conv.messages,
-             streaming: true,
-             stream_content: "",
-             stream_error: nil,
-             pending_tool_calls: [],
-             stream_task_pid: pid
-           )}
-
-        {:error, reason} ->
-          {:noreply, put_flash(socket, :error, action_error("edit message", reason))}
-      end
-    end
-  end
-
-  @impl true
-  def handle_event("edit_form_changed", %{"content" => content}, socket) do
-    {:noreply, assign(socket, editing_message_content: content)}
-  end
-
-  @impl true
-  def handle_event("edit_toggle_tool_picker", _params, socket) do
-    show = !socket.assigns.edit_show_tool_picker
-
-    if show && socket.assigns.available_tools == [] do
-      send(self(), :fetch_tools)
-      {:noreply, assign(socket, edit_show_tool_picker: true, tools_loading: true)}
-    else
-      {:noreply, assign(socket, edit_show_tool_picker: show)}
-    end
-  end
-
-  @impl true
-  def handle_event("edit_toggle_server", %{"server-id" => server_id}, socket) do
-    selected = socket.assigns.edit_selected_server_ids
-
-    selected =
-      if MapSet.member?(selected, server_id) do
-        MapSet.delete(selected, server_id)
-      else
-        MapSet.put(selected, server_id)
-      end
-
-    {:noreply, assign(socket, edit_selected_server_ids: selected)}
-  end
-
-  @impl true
-  def handle_event("edit_toggle_auto_confirm", _params, socket) do
-    {:noreply, assign(socket, edit_auto_confirm_tools: !socket.assigns.edit_auto_confirm_tools)}
-  end
-
-  @impl true
-  def handle_event("edit_clear_tools", _params, socket) do
-    {:noreply, assign(socket, edit_selected_server_ids: MapSet.new())}
-  end
-
-  @impl true
-  def handle_event("edit_refresh_tools", _params, socket) do
-    send(self(), :fetch_tools)
-    {:noreply, assign(socket, tools_loading: true, available_tools: [])}
+  def handle_event(event, params, socket) when event in @cost_events do
+    CostHandler.handle_event(event, params, socket)
   end
 
   # --- Tool Picker Events ---
 
-  @impl true
-  def handle_event("select_llm_model", %{"model_id" => id}, socket) do
-    user = socket.assigns.current_user
-    Liteskill.Accounts.update_preferences(user, %{"preferred_llm_model_id" => id})
-
-    # Keep cost fixed, recalculate tokens for new model
-    tokens =
-      if socket.assigns.cost_limit do
-        estimate_tokens(socket.assigns.cost_limit, id, socket.assigns.available_llm_models)
-      end
-
-    {:noreply, assign(socket, selected_llm_model_id: id, cost_limit_tokens: tokens)}
-  end
+  @tool_events ToolHandler.events()
 
   @impl true
-  def handle_event("toggle_cost_popover", _params, socket) do
-    {:noreply, assign(socket, show_cost_popover: !socket.assigns.show_cost_popover)}
-  end
-
-  @impl true
-  def handle_event("update_cost_limit", %{"cost" => ""}, socket) do
-    {:noreply, assign(socket, cost_limit: nil, cost_limit_input: "", cost_limit_tokens: nil)}
-  end
-
-  def handle_event("update_cost_limit", %{"cost" => cost_str} = params, socket) do
-    if params["_target"] == ["cost"] do
-      case Decimal.parse(cost_str) do
-        {cost, _} ->
-          tokens =
-            estimate_tokens(
-              cost,
-              socket.assigns.selected_llm_model_id,
-              socket.assigns.available_llm_models
-            )
-
-          {:noreply,
-           assign(socket,
-             cost_limit: cost,
-             cost_limit_input: cost_str,
-             cost_limit_tokens: tokens
-           )}
-
-        :error ->
-          {:noreply, socket}
-      end
-    else
-      {:noreply, socket}
-    end
-  end
-
-  @impl true
-  def handle_event("update_cost_limit", %{"tokens" => ""}, socket) do
-    {:noreply, assign(socket, cost_limit: nil, cost_limit_input: "", cost_limit_tokens: nil)}
-  end
-
-  def handle_event("update_cost_limit", %{"tokens" => tokens_str} = params, socket) do
-    if params["_target"] == ["tokens"] do
-      case Integer.parse(tokens_str) do
-        {tokens, _} when tokens > 0 ->
-          cost =
-            estimate_cost(
-              tokens,
-              socket.assigns.selected_llm_model_id,
-              socket.assigns.available_llm_models
-            )
-
-          input_str = if cost, do: Decimal.to_string(Decimal.round(cost, 4)), else: ""
-
-          {:noreply,
-           assign(socket,
-             cost_limit: cost,
-             cost_limit_input: input_str,
-             cost_limit_tokens: tokens
-           )}
-
-        _ ->
-          {:noreply, socket}
-      end
-    else
-      {:noreply, socket}
-    end
-  end
-
-  @impl true
-  def handle_event("clear_cost_limit", _params, socket) do
-    {:noreply,
-     assign(socket,
-       cost_limit: nil,
-       cost_limit_input: "",
-       cost_limit_tokens: nil,
-       show_cost_popover: false
-     )}
-  end
-
-  @impl true
-  def handle_event("toggle_tool_picker", _params, socket) do
-    show = !socket.assigns.show_tool_picker
-
-    if show && socket.assigns.available_tools == [] do
-      # Fetch tools when opening picker for the first time
-      send(self(), :fetch_tools)
-      {:noreply, assign(socket, show_tool_picker: true, tools_loading: true)}
-    else
-      {:noreply, assign(socket, show_tool_picker: show)}
-    end
-  end
-
-  @impl true
-  def handle_event("toggle_server", %{"server-id" => server_id}, socket) do
-    user_id = socket.assigns.current_user.id
-    selected = socket.assigns.selected_server_ids
-
-    selected =
-      if MapSet.member?(selected, server_id) do
-        McpServers.deselect_server(user_id, server_id)
-        MapSet.delete(selected, server_id)
-      else
-        McpServers.select_server(user_id, server_id)
-        MapSet.put(selected, server_id)
-      end
-
-    {:noreply, assign(socket, selected_server_ids: selected)}
-  end
-
-  @impl true
-  def handle_event("toggle_auto_confirm", _params, socket) do
-    new_val = !socket.assigns.auto_confirm_tools
-    user = socket.assigns.current_user
-    Liteskill.Accounts.update_preferences(user, %{"auto_confirm_tools" => new_val})
-    {:noreply, assign(socket, auto_confirm_tools: new_val)}
-  end
-
-  @impl true
-  def handle_event("clear_tools", _params, socket) do
-    McpServers.clear_selected_servers(socket.assigns.current_user.id)
-    {:noreply, assign(socket, selected_server_ids: MapSet.new())}
-  end
-
-  @impl true
-  def handle_event("refresh_tools", _params, socket) do
-    send(self(), :fetch_tools)
-    {:noreply, assign(socket, tools_loading: true, available_tools: [])}
-  end
-
-  @impl true
-  def handle_event("approve_tool_call", %{"tool-use-id" => tool_use_id}, socket) do
-    Chat.broadcast_tool_decision(socket.assigns.conversation.stream_id, tool_use_id, :approved)
-    {:noreply, socket}
-  end
-
-  @impl true
-  def handle_event("reject_tool_call", %{"tool-use-id" => tool_use_id}, socket) do
-    Chat.broadcast_tool_decision(socket.assigns.conversation.stream_id, tool_use_id, :rejected)
-    {:noreply, socket}
-  end
-
-  @impl true
-  def handle_event("show_tool_call", %{"tool-use-id" => tool_use_id}, socket) do
-    tc = find_tool_call(socket, tool_use_id)
-    {:noreply, assign(socket, tool_call_modal: tc)}
-  end
-
-  @impl true
-  def handle_event("close_tool_call_modal", _params, socket) do
-    {:noreply, assign(socket, tool_call_modal: nil)}
-  end
-
-  @impl true
-  def handle_event("show_usage_modal", _params, socket) do
-    conv = socket.assigns.conversation
-
-    if conv do
-      totals = Liteskill.Usage.usage_by_conversation(conv.id)
-
-      by_model =
-        Liteskill.Usage.usage_summary(conversation_id: conv.id, group_by: :model_id)
-
-      {:noreply,
-       assign(socket,
-         show_usage_modal: true,
-         usage_modal_data: %{totals: totals, by_model: by_model}
-       )}
-    else
-      {:noreply, socket}
-    end
-  end
-
-  @impl true
-  def handle_event("close_usage_modal", _params, socket) do
-    {:noreply, assign(socket, show_usage_modal: false)}
+  def handle_event(event, params, socket) when event in @tool_events do
+    ToolHandler.handle_event(event, params, socket)
   end
 
   # --- Sharing Modal Events ---
@@ -1468,95 +986,10 @@ defmodule LiteskillWeb.ChatLive do
     end
   end
 
-  def handle_info(:fetch_tools, socket) do
-    user_id = socket.assigns.current_user.id
-    servers = McpServers.list_servers(user_id)
-    active_servers = Enum.filter(servers, &(&1.status == "active"))
+  def handle_info(:fetch_tools, socket), do: ToolHandler.handle_info(:fetch_tools, socket)
 
-    {builtin_servers, mcp_servers} =
-      Enum.split_with(active_servers, &Map.has_key?(&1, :builtin))
-
-    builtin_tools =
-      Enum.flat_map(builtin_servers, fn server ->
-        Enum.map(server.builtin.list_tools(), fn tool ->
-          %{
-            id: "#{server.id}:#{tool["name"]}",
-            server_id: server.id,
-            server_name: server.name,
-            name: tool["name"],
-            description: tool["description"],
-            input_schema: tool["inputSchema"],
-            source: :builtin
-          }
-        end)
-      end)
-
-    {mcp_tools, errors} =
-      Enum.reduce(mcp_servers, {[], []}, fn server, {tools_acc, errors_acc} ->
-        case McpClient.list_tools(server) do
-          {:ok, tool_list} ->
-            mapped =
-              Enum.map(tool_list, fn tool ->
-                %{
-                  id: "#{server.id}:#{tool["name"]}",
-                  server_id: server.id,
-                  server_name: server.name,
-                  name: tool["name"],
-                  description: tool["description"],
-                  input_schema: tool["inputSchema"],
-                  source: :mcp
-                }
-              end)
-
-            {tools_acc ++ mapped, errors_acc}
-
-          {:error, reason} ->
-            require Logger
-            Logger.warning("Failed to fetch tools from #{server.name}: #{inspect(reason)}")
-            {tools_acc, errors_acc ++ ["#{server.name}: #{format_tool_error(reason)}"]}
-        end
-      end)
-
-    socket = assign(socket, available_tools: builtin_tools ++ mcp_tools, tools_loading: false)
-
-    socket =
-      if errors != [] do
-        put_flash(socket, :error, "Tool fetch failed: " <> Enum.join(errors, "; "))
-      else
-        socket
-      end
-
-    {:noreply, socket}
-  end
-
-  def handle_info(:reload_tool_calls, socket) do
-    case socket.assigns.conversation do
-      nil ->
-        {:noreply, socket}
-
-      conversation ->
-        user_id = socket.assigns.current_user.id
-
-        {:ok, messages} = Chat.list_messages(conversation.id, user_id)
-        db_pending = load_pending_tool_calls(messages)
-
-        # During streaming, load_pending_tool_calls returns [] because the message
-        # hasn't completed with stop_reason: "tool_use" yet. Keep the in-memory
-        # pending_tool_calls built from PubSub events in that case.
-        pending =
-          if db_pending != [] do
-            db_pending
-          else
-            if socket.assigns.streaming && socket.assigns.pending_tool_calls != [] do
-              socket.assigns.pending_tool_calls
-            else
-              []
-            end
-          end
-
-        {:noreply, assign(socket, messages: messages, pending_tool_calls: pending)}
-    end
-  end
+  def handle_info(:reload_tool_calls, socket),
+    do: ToolHandler.handle_info(:reload_tool_calls, socket)
 
   def handle_info({:DOWN, _ref, :process, pid, _reason}, socket) do
     if socket.assigns.streaming && pid == socket.assigns.stream_task_pid do
@@ -1567,105 +1000,6 @@ defmodule LiteskillWeb.ChatLive do
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}
-
-  attr :id, :string, required: true
-  attr :class, :string, default: ""
-  attr :available_llm_models, :list, required: true
-  attr :selected_llm_model_id, :string, default: nil
-
-  defp model_picker(assigns) do
-    ~H"""
-    <div :if={@available_llm_models != []} class={["flex items-center gap-1 px-1", @class]}>
-      <.icon name="hero-cpu-chip-micro" class="size-3 text-base-content/40" />
-      <form phx-change="select_llm_model">
-        <select
-          id={@id}
-          name="model_id"
-          class="select select-ghost select-xs text-xs text-base-content/50 hover:text-base-content/70 min-h-0 h-6 pl-0"
-        >
-          <%= for m <- @available_llm_models do %>
-            <option value={m.id} selected={m.id == @selected_llm_model_id}>
-              {m.name}
-            </option>
-          <% end %>
-        </select>
-      </form>
-    </div>
-    """
-  end
-
-  attr :cost_limit, :any, default: nil
-  attr :cost_limit_input, :string, default: ""
-  attr :cost_limit_tokens, :any, default: nil
-  attr :show_cost_popover, :boolean, default: false
-
-  defp cost_limit_button(assigns) do
-    ~H"""
-    <div class="relative">
-      <button
-        type="button"
-        phx-click="toggle_cost_popover"
-        class={[
-          "btn btn-ghost btn-sm btn-square",
-          if(@cost_limit, do: "text-warning", else: "text-base-content/50")
-        ]}
-        title={if @cost_limit, do: "Cost limit: $#{@cost_limit_input}", else: "Set cost limit"}
-      >
-        <.icon name="hero-currency-dollar-micro" class="size-4" />
-      </button>
-      <div
-        :if={@show_cost_popover}
-        class="absolute top-full right-0 mt-1 z-50"
-        phx-click-away="toggle_cost_popover"
-      >
-        <div class="card bg-base-100 shadow-xl border border-base-300 p-3 w-56">
-          <h4 class="text-xs font-semibold mb-2">Cost Guardrail</h4>
-          <span :if={@cost_limit} class="badge badge-warning badge-sm mb-2">
-            ${@cost_limit_input}
-            <span :if={@cost_limit_tokens} class="ml-1 opacity-70">
-              (~{@cost_limit_tokens} tokens)
-            </span>
-          </span>
-          <form phx-change="update_cost_limit">
-            <div class="flex gap-2">
-              <div class="form-control flex-1">
-                <label class="text-xs text-base-content/60 mb-0.5">Cost ($)</label>
-                <input
-                  name="cost"
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={@cost_limit_input}
-                  class="input input-xs input-bordered w-full"
-                  placeholder="0.50"
-                />
-              </div>
-              <div class="form-control flex-1">
-                <label class="text-xs text-base-content/60 mb-0.5">Tokens</label>
-                <input
-                  name="tokens"
-                  type="number"
-                  step="1000"
-                  min="0"
-                  value={@cost_limit_tokens}
-                  class="input input-xs input-bordered w-full"
-                  placeholder="—"
-                />
-              </div>
-            </div>
-          </form>
-          <button
-            type="button"
-            phx-click="clear_cost_limit"
-            class="btn btn-ghost btn-xs mt-2 w-full text-base-content/50"
-          >
-            No limit
-          </button>
-        </div>
-      </div>
-    </div>
-    """
-  end
 
   defp handle_event_store_event(
          %{event_type: "AssistantStreamStarted"},
@@ -1703,7 +1037,7 @@ defmodule LiteskillWeb.ChatLive do
          %{event_type: "AssistantStreamFailed", data: data},
          socket
        ) do
-    error = friendly_stream_error(data["error_type"], data["error_message"])
+    error = ChatHelpers.friendly_stream_error(data["error_type"], data["error_message"])
 
     socket
     |> assign(streaming: false, stream_content: "", stream_error: error)
@@ -1725,13 +1059,7 @@ defmodule LiteskillWeb.ChatLive do
          socket
        ) do
     # Build tool call immediately from event data to avoid race with projector
-    tc = %ToolCall{
-      tool_use_id: data["tool_use_id"],
-      tool_name: data["tool_name"],
-      input: data["input"],
-      status: "started",
-      message_id: data["message_id"]
-    }
+    tc = ToolHandler.build_tool_call_from_event(data)
 
     pending = socket.assigns.pending_tool_calls ++ [tc]
 
@@ -1763,38 +1091,6 @@ defmodule LiteskillWeb.ChatLive do
 
   defp handle_event_store_event(_event, socket), do: socket
 
-  # --- Cost guardrail helpers ---
-
-  defp estimate_tokens(cost_decimal, model_id, models) do
-    zero = Decimal.new(0)
-
-    case Enum.find(models, &(&1.id == model_id)) do
-      %{input_cost_per_million: rate} when not is_nil(rate) ->
-        if Decimal.compare(rate, zero) != :eq do
-          cost_decimal
-          |> Decimal.div(rate)
-          |> Decimal.mult(1_000_000)
-          |> Decimal.round(0)
-          |> Decimal.to_integer()
-        end
-
-      _ ->
-        nil
-    end
-  end
-
-  defp estimate_cost(tokens, model_id, models) do
-    case Enum.find(models, &(&1.id == model_id)) do
-      %{input_cost_per_million: rate} when not is_nil(rate) ->
-        Decimal.new(tokens)
-        |> Decimal.mult(rate)
-        |> Decimal.div(1_000_000)
-
-      _ ->
-        nil
-    end
-  end
-
   # --- Helpers ---
 
   defp trigger_llm_stream(conversation, user_id, socket, tool_config) do
@@ -1802,9 +1098,9 @@ defmodule LiteskillWeb.ChatLive do
 
     tool_opts =
       if tool_config do
-        build_tool_opts_from_config(tool_config, user_id)
+        ToolHandler.build_tool_opts_from_config(tool_config, user_id)
       else
-        build_tool_opts(socket)
+        ToolHandler.build_tool_opts(socket)
       end
 
     has_tools = Keyword.has_key?(tool_opts, :tools)
@@ -1888,203 +1184,6 @@ defmodule LiteskillWeb.ChatLive do
     pid
   end
 
-  defp build_tool_opts(socket) do
-    selected = socket.assigns.selected_server_ids
-    available = socket.assigns.available_tools
-
-    # Select all tools from selected servers
-    selected_tools = Enum.filter(available, &MapSet.member?(selected, &1.server_id))
-
-    if selected_tools == [] do
-      []
-    else
-      bedrock_tools =
-        Enum.map(selected_tools, fn tool ->
-          %{
-            "toolSpec" => %{
-              "name" => tool.name,
-              "description" => tool.description || "",
-              "inputSchema" => %{"json" => tool.input_schema || %{}}
-            }
-          }
-        end)
-
-      user_id = socket.assigns.current_user.id
-
-      tool_servers =
-        Map.new(selected_tools, fn tool ->
-          server =
-            case McpServers.get_server(tool.server_id, user_id) do
-              {:ok, s} -> s
-              _ -> nil
-            end
-
-          {tool.name, server}
-        end)
-
-      [
-        tools: bedrock_tools,
-        tool_servers: tool_servers,
-        auto_confirm: socket.assigns.auto_confirm_tools,
-        user_id: user_id
-      ]
-    end
-  end
-
-  defp build_tool_config(socket) do
-    selected = socket.assigns.selected_server_ids
-    available = socket.assigns.available_tools
-
-    selected_tools = Enum.filter(available, &MapSet.member?(selected, &1.server_id))
-
-    if selected_tools == [] do
-      nil
-    else
-      servers =
-        selected_tools
-        |> Enum.map(& &1.server_id)
-        |> Enum.uniq()
-        |> Enum.map(fn sid ->
-          tool = Enum.find(selected_tools, &(&1.server_id == sid))
-          %{"id" => sid, "name" => tool.server_name}
-        end)
-
-      tools =
-        Enum.map(selected_tools, fn tool ->
-          %{
-            "toolSpec" => %{
-              "name" => tool.name,
-              "description" => tool.description || "",
-              "inputSchema" => %{"json" => tool.input_schema || %{}}
-            }
-          }
-        end)
-
-      tool_name_to_server_id = Map.new(selected_tools, &{&1.name, &1.server_id})
-
-      %{
-        "servers" => servers,
-        "tools" => tools,
-        "tool_name_to_server_id" => tool_name_to_server_id,
-        "auto_confirm" => socket.assigns.auto_confirm_tools
-      }
-    end
-  end
-
-  defp build_edit_tool_config(socket) do
-    selected = socket.assigns.edit_selected_server_ids
-    available = socket.assigns.available_tools
-
-    selected_tools = Enum.filter(available, &MapSet.member?(selected, &1.server_id))
-
-    if selected_tools == [] do
-      nil
-    else
-      servers =
-        selected_tools
-        |> Enum.map(& &1.server_id)
-        |> Enum.uniq()
-        |> Enum.map(fn sid ->
-          tool = Enum.find(selected_tools, &(&1.server_id == sid))
-          %{"id" => sid, "name" => tool.server_name}
-        end)
-
-      tools =
-        Enum.map(selected_tools, fn tool ->
-          %{
-            "toolSpec" => %{
-              "name" => tool.name,
-              "description" => tool.description || "",
-              "inputSchema" => %{"json" => tool.input_schema || %{}}
-            }
-          }
-        end)
-
-      tool_name_to_server_id = Map.new(selected_tools, &{&1.name, &1.server_id})
-
-      %{
-        "servers" => servers,
-        "tools" => tools,
-        "tool_name_to_server_id" => tool_name_to_server_id,
-        "auto_confirm" => socket.assigns.edit_auto_confirm_tools
-      }
-    end
-  end
-
-  defp clear_edit_assigns(socket) do
-    assign(socket,
-      editing_message_id: nil,
-      editing_message_content: "",
-      edit_selected_server_ids: MapSet.new(),
-      edit_show_tool_picker: false,
-      edit_auto_confirm_tools: true
-    )
-  end
-
-  defp display_messages(messages, nil), do: messages
-
-  defp display_messages(messages, editing_message_id) do
-    # Show messages up to and including the one being edited
-    (Enum.take_while(messages, &(&1.id != editing_message_id)) ++
-       [Enum.find(messages, &(&1.id == editing_message_id))])
-    |> Enum.reject(&is_nil/1)
-  end
-
-  defp build_tool_opts_from_config(nil, _user_id), do: []
-
-  defp build_tool_opts_from_config(tool_config, user_id) do
-    tools = tool_config["tools"] || []
-    name_to_server = tool_config["tool_name_to_server_id"] || %{}
-    auto_confirm = tool_config["auto_confirm"] || false
-
-    if tools == [] do
-      []
-    else
-      tool_servers =
-        Map.new(name_to_server, fn {tool_name, server_id} ->
-          server =
-            case McpServers.get_server(server_id, user_id) do
-              {:ok, s} -> s
-              _ -> nil
-            end
-
-          {tool_name, server}
-        end)
-
-      [
-        tools: tools,
-        tool_servers: tool_servers,
-        auto_confirm: auto_confirm,
-        user_id: user_id
-      ]
-    end
-  end
-
-  defp find_tool_call(socket, tool_use_id) do
-    # Check pending (streaming) tool calls first
-    case Enum.find(socket.assigns.pending_tool_calls, &(&1.tool_use_id == tool_use_id)) do
-      nil ->
-        # Search in DB-loaded messages
-        socket.assigns.messages
-        |> Enum.flat_map(&MessageBuilder.tool_calls_for_message/1)
-        |> Enum.find(&(&1.tool_use_id == tool_use_id))
-
-      tc ->
-        tc
-    end
-  end
-
-  defp load_pending_tool_calls(messages) do
-    case List.last(messages) do
-      %{role: "assistant", stop_reason: "tool_use"} = msg ->
-        MessageBuilder.tool_calls_for_message(msg)
-        |> Enum.filter(&(&1.status == "started"))
-
-      _ ->
-        []
-    end
-  end
-
   defp maybe_unsubscribe(socket) do
     case socket.assigns[:conversation] do
       %{stream_id: stream_id} when not is_nil(stream_id) ->
@@ -2095,33 +1194,6 @@ defmodule LiteskillWeb.ChatLive do
     end
 
     :ok
-  end
-
-  defp refresh_managed_conversations(socket) do
-    user_id = socket.assigns.current_user.id
-    page_size = socket.assigns.conversations_page_size
-    search = socket.assigns.conversations_search
-    opts = if search != "", do: [search: search], else: []
-
-    offset = (socket.assigns.conversations_page - 1) * page_size
-    managed = Chat.list_conversations(user_id, [limit: page_size, offset: offset] ++ opts)
-    total = Chat.count_conversations(user_id, opts)
-
-    assign(socket,
-      managed_conversations: managed,
-      conversations_total: total
-    )
-  end
-
-  defp truncate_title(content) do
-    case String.split(content, "\n", parts: 2) do
-      [first | _] ->
-        if String.length(first) > 50 do
-          String.slice(first, 0, 47) <> "..."
-        else
-          first
-        end
-    end
   end
 
   defp recover_stuck_stream(socket) do
@@ -2152,100 +1224,4 @@ defmodule LiteskillWeb.ChatLive do
 
   defp task_alive?(nil), do: false
   defp task_alive?(pid), do: Process.alive?(pid)
-
-  defp find_source_by_doc_id(messages, doc_id) do
-    msg =
-      Enum.find(messages, fn m ->
-        m.role == "assistant" && m.rag_sources &&
-          Enum.any?(m.rag_sources, &(&1["document_id"] == doc_id))
-      end)
-
-    if msg do
-      source = Enum.find(msg.rag_sources, &(&1["document_id"] == doc_id))
-      {source, msg.rag_sources}
-    else
-      {nil, []}
-    end
-  end
-
-  defp lookup_source_from_db(doc_id, user_id) do
-    alias Liteskill.Rag
-
-    with {:ok, doc} <- Rag.get_document_with_source(doc_id, user_id) do
-      wiki_doc_id = get_in(doc.metadata || %{}, ["wiki_document_id"])
-
-      %{
-        "chunk_id" => nil,
-        "document_id" => doc.id,
-        "document_title" => doc.title,
-        "source_name" => doc.source.name,
-        "content" => doc.content,
-        "position" => nil,
-        "relevance_score" => nil,
-        "source_uri" => if(wiki_doc_id, do: "/wiki/#{wiki_doc_id}")
-      }
-    else
-      _ -> nil
-    end
-  end
-
-  defp format_tool_error(%{status: status, body: body}) when is_binary(body),
-    do: "HTTP #{status}: #{String.slice(body, 0..100)}"
-
-  defp format_tool_error(%{status: status}), do: "HTTP #{status}"
-  defp format_tool_error(%Req.TransportError{reason: reason}), do: "Connection error: #{reason}"
-  defp format_tool_error(reason) when is_binary(reason), do: reason
-  defp format_tool_error(_reason), do: "unexpected error"
-
-  defp friendly_stream_error("max_retries_exceeded", _msg) do
-    %{
-      title: "The AI service is currently busy",
-      detail: "Too many requests — please wait a moment and retry."
-    }
-  end
-
-  defp friendly_stream_error("request_error", msg) when is_binary(msg) and msg != "" do
-    %{
-      title: "LLM request failed",
-      detail: clean_error_detail(msg)
-    }
-  end
-
-  defp friendly_stream_error(_type, msg) when is_binary(msg) and msg != "" do
-    %{
-      title: "Something went wrong",
-      detail: clean_error_detail(msg)
-    }
-  end
-
-  defp friendly_stream_error(_type, _msg) do
-    %{
-      title: "Something went wrong",
-      detail: "An unexpected error occurred. Please try again."
-    }
-  end
-
-  # Extract meaningful message from raw struct text that may have leaked into stored errors
-  defp clean_error_detail(msg) do
-    case Regex.run(~r/"message" => "([^"]+)"/, msg) do
-      [_, extracted] ->
-        case Regex.run(~r/^HTTP (\d+):/, msg) do
-          [_, status] -> "HTTP #{status}: #{extracted}"
-          nil -> extracted
-        end
-
-      nil ->
-        msg
-    end
-  end
-
-  defp safe_page(page) when is_binary(page) do
-    case Integer.parse(page) do
-      {n, ""} when n > 0 -> n
-      _ -> 1
-    end
-  end
-
-  defp safe_page(page) when is_integer(page) and page > 0, do: page
-  defp safe_page(_), do: 1
 end
