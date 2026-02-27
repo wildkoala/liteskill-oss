@@ -69,6 +69,17 @@ defmodule Liteskill.Chat.Projector do
     {:noreply, state}
   end
 
+  # coveralls-ignore-start - only reached on transient DB errors triggering async retry
+  @impl true
+  def handle_info({:retry_projection, stream_id, event, attempt}, state) do
+    project_with_retry(stream_id, event, attempt)
+    {:noreply, state}
+  end
+
+  # coveralls-ignore-stop
+
+  def handle_info(_msg, state), do: {:noreply, state}
+
   # --- Projection Logic ---
 
   @max_projection_retries 2
@@ -99,8 +110,8 @@ defmodule Liteskill.Chat.Projector do
   defp handle_projection_error(stream_id, event, attempt, error)
        when attempt < @max_projection_retries do
     if retryable_projection_error?(error) do
-      Process.sleep(@projection_retry_backoff_ms * (attempt + 1))
-      project_with_retry(stream_id, event, attempt + 1)
+      backoff_ms = @projection_retry_backoff_ms * (attempt + 1)
+      Process.send_after(self(), {:retry_projection, stream_id, event, attempt + 1}, backoff_ms)
     else
       log_projection_failure(stream_id, event, attempt, error)
     end
