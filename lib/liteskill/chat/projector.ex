@@ -69,80 +69,31 @@ defmodule Liteskill.Chat.Projector do
     {:noreply, state}
   end
 
-  # coveralls-ignore-start - only reached on transient DB errors triggering async retry
-  @impl true
-  def handle_info({:retry_projection, stream_id, event, attempt}, state) do
-    project_with_retry(stream_id, event, attempt)
-    {:noreply, state}
-  end
-
-  # coveralls-ignore-stop
-
-  def handle_info(_msg, state), do: {:noreply, state}
-
   # --- Projection Logic ---
-
-  @max_projection_retries 2
-  @projection_retry_backoff_ms 100
 
   defp do_project(stream_id, events) do
     Enum.each(events, fn event ->
-      project_with_retry(stream_id, event, 0)
+      try do
+        project_event(event)
+      rescue
+        e ->
+          Logger.error(
+            "Projector failed: stream=#{stream_id} event=#{event.event_type} version=#{event.stream_version} error=#{Exception.message(e)}"
+          )
+
+          :telemetry.execute(
+            [:liteskill, :projector, :event_failed],
+            %{count: 1},
+            %{
+              stream_id: stream_id,
+              event_type: event.event_type,
+              stream_version: event.stream_version,
+              error: Exception.message(e)
+            }
+          )
+      end
     end)
   end
-
-  defp project_with_retry(stream_id, event, attempt) do
-    project_event(event)
-  rescue
-    e in [
-      Postgrex.Error,
-      DBConnection.ConnectionError,
-      Ecto.ConstraintError,
-      Ecto.StaleEntryError,
-      Ecto.InvalidChangesetError,
-      Ecto.Query.CastError,
-      Ecto.ChangeError
-    ] ->
-      handle_projection_error(stream_id, event, attempt, e)
-  end
-
-  # coveralls-ignore-start - retry/failure paths require transient DB errors
-  defp handle_projection_error(stream_id, event, attempt, error)
-       when attempt < @max_projection_retries do
-    if retryable_projection_error?(error) do
-      backoff_ms = @projection_retry_backoff_ms * (attempt + 1)
-      Process.send_after(self(), {:retry_projection, stream_id, event, attempt + 1}, backoff_ms)
-    else
-      log_projection_failure(stream_id, event, attempt, error)
-    end
-  end
-
-  defp handle_projection_error(stream_id, event, attempt, error) do
-    log_projection_failure(stream_id, event, attempt, error)
-  end
-
-  defp log_projection_failure(stream_id, event, attempt, error) do
-    Logger.error(
-      "Projector failed: stream=#{stream_id} event=#{event.event_type} version=#{event.stream_version} error=#{Exception.message(error)} attempts=#{attempt + 1}"
-    )
-
-    :telemetry.execute(
-      [:liteskill, :projector, :event_failed],
-      %{count: 1},
-      %{
-        stream_id: stream_id,
-        event_type: event.event_type,
-        stream_version: event.stream_version,
-        error: Exception.message(error)
-      }
-    )
-  end
-
-  defp retryable_projection_error?(%DBConnection.ConnectionError{}), do: true
-  defp retryable_projection_error?(%Postgrex.Error{}), do: true
-  defp retryable_projection_error?(_), do: false
-
-  # coveralls-ignore-stop
 
   defp project_event(%Event{event_type: "ConversationCreated", data: data, stream_id: stream_id}) do
     %Conversation{}
@@ -167,7 +118,7 @@ defmodule Liteskill.Chat.Projector do
        }) do
     with_conversation(stream_id, fn conversation ->
       Repo.transaction(fn ->
-        message_count = increment_message_count(conversation.id)
+        message_count = conversation.message_count + 1
 
         %Message{}
         |> Message.changeset(%{
@@ -182,10 +133,12 @@ defmodule Liteskill.Chat.Projector do
         })
         |> Repo.insert!(on_conflict: :nothing)
 
-        from(c in Conversation, where: c.id == ^conversation.id)
-        |> Repo.update_all(
-          set: [last_message_at: DateTime.utc_now() |> DateTime.truncate(:second)]
-        )
+        conversation
+        |> Conversation.changeset(%{
+          message_count: message_count,
+          last_message_at: DateTime.utc_now() |> DateTime.truncate(:second)
+        })
+        |> Repo.update!()
       end)
     end)
   end
@@ -198,7 +151,7 @@ defmodule Liteskill.Chat.Projector do
        }) do
     with_conversation(stream_id, fn conversation ->
       Repo.transaction(fn ->
-        message_count = increment_message_count(conversation.id)
+        message_count = conversation.message_count + 1
 
         %Message{}
         |> Message.changeset(%{
@@ -214,8 +167,12 @@ defmodule Liteskill.Chat.Projector do
         })
         |> Repo.insert!(on_conflict: :nothing)
 
-        from(c in Conversation, where: c.id == ^conversation.id)
-        |> Repo.update_all(set: [status: "streaming"])
+        conversation
+        |> Conversation.changeset(%{
+          message_count: message_count,
+          status: "streaming"
+        })
+        |> Repo.update!()
       end)
     end)
   end
@@ -294,25 +251,23 @@ defmodule Liteskill.Chat.Projector do
          stream_id: stream_id
        }) do
     with_conversation(stream_id, fn conversation ->
-      Repo.transaction(fn ->
-        conversation
-        |> Conversation.changeset(%{status: "active"})
-        |> Repo.update!()
-
-        # Mark the streaming message as failed
-        if data["message_id"] do
-          case Repo.get(Message, data["message_id"]) do
-            %Message{status: "streaming"} = msg ->
-              msg
-              |> Message.changeset(%{status: "failed", stop_reason: "error"})
-              |> Repo.update!()
-
-            _ ->
-              :ok
-          end
-        end
-      end)
+      conversation
+      |> Conversation.changeset(%{status: "active"})
+      |> Repo.update!()
     end)
+
+    # Mark the streaming message as failed
+    if data["message_id"] do
+      case Repo.get(Message, data["message_id"]) do
+        %Message{status: "streaming"} = msg ->
+          msg
+          |> Message.changeset(%{status: "failed", stop_reason: "error"})
+          |> Repo.update!()
+
+        _ ->
+          :ok
+      end
+    end
   end
 
   defp project_event(%Event{event_type: "ToolCallStarted", data: data}) do
@@ -347,13 +302,6 @@ defmodule Liteskill.Chat.Projector do
   defp project_event(%Event{event_type: "ConversationForked", data: data, stream_id: stream_id}) do
     parent =
       Repo.one(from c in Conversation, where: c.stream_id == ^data["parent_stream_id"])
-
-    if is_nil(parent) do
-      Logger.warning(
-        "Projector: parent conversation not found for stream=#{data["parent_stream_id"]} " <>
-          "while projecting ConversationForked on stream=#{stream_id} — fork tree may be incomplete"
-      )
-    end
 
     with_conversation(stream_id, fn conversation ->
       conversation
@@ -428,20 +376,17 @@ defmodule Liteskill.Chat.Projector do
   defp project_event(_event), do: :ok
 
   defp do_rebuild do
-    Repo.transaction(
-      fn ->
-        Repo.delete_all(MessageChunk)
-        Repo.delete_all(ToolCall)
-        Repo.delete_all(Message)
-        Repo.delete_all(Conversation)
+    Repo.transaction(fn ->
+      Repo.delete_all(MessageChunk)
+      Repo.delete_all(ToolCall)
+      Repo.delete_all(Message)
+      Repo.delete_all(Conversation)
 
-        Event
-        |> order_by([e], asc: e.inserted_at, asc: e.stream_version)
-        |> Repo.stream(max_rows: 500)
-        |> Enum.each(&project_event/1)
-      end,
-      timeout: :infinity
-    )
+      Event
+      |> order_by([e], asc: e.inserted_at, asc: e.stream_version)
+      |> Repo.all()
+      |> Enum.each(&project_event/1)
+    end)
   end
 
   defp with_conversation(stream_id, fun) do
@@ -460,19 +405,6 @@ defmodule Liteskill.Chat.Projector do
       conversation ->
         fun.(conversation)
     end
-  end
-
-  # Atomically increment message_count and return the new value.
-  # Uses a single UPDATE ... RETURNING to avoid read-modify-write races.
-  defp increment_message_count(conversation_id) do
-    {1, [%{message_count: new_count}]} =
-      from(c in Conversation,
-        where: c.id == ^conversation_id,
-        select: %{message_count: c.message_count}
-      )
-      |> Repo.update_all(inc: [message_count: 1])
-
-    new_count
   end
 
   defp filter_cited_sources(nil, _content), do: nil

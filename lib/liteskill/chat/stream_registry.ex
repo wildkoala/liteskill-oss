@@ -140,20 +140,10 @@ defmodule Liteskill.Chat.StreamRegistry do
       try do
         Liteskill.Chat.recover_stream_by_id(conv_id)
       rescue
-        # coveralls-ignore-start — rescue runs inside async Task.Supervisor child
-        e in [
-          Ecto.NoResultsError,
-          Postgrex.Error,
-          DBConnection.ConnectionError,
-          Ecto.ConstraintError,
-          Ecto.StaleEntryError,
-          Ecto.InvalidChangesetError
-        ] ->
+        e ->
           Logger.warning(
             "StreamRegistry auto-recovery failed for #{conv_id}: #{Exception.message(e)}"
           )
-
-          # coveralls-ignore-stop
       end
     end)
 

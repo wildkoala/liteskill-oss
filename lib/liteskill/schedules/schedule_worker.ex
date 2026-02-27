@@ -66,11 +66,9 @@ defmodule Liteskill.Schedules.ScheduleWorker do
 
         :ok
 
-      # coveralls-ignore-start — defensive: schedule attrs are always valid
       {:error, reason} ->
         Logger.error("Schedule #{schedule.name} failed to create run: #{inspect(reason)}")
         {:error, inspect(reason)}
-        # coveralls-ignore-stop
     end
   end
 end

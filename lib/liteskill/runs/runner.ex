@@ -215,18 +215,7 @@ defmodule Liteskill.Runs.Runner do
       try do
         execute_agent(agent, member, handoff, context, run.id, resume_messages)
       rescue
-        e in [
-          RuntimeError,
-          ArgumentError,
-          KeyError,
-          MatchError,
-          FunctionClauseError,
-          Postgrex.Error,
-          DBConnection.ConnectionError,
-          Ecto.QueryError,
-          Ecto.ConstraintError,
-          Ecto.InvalidChangesetError
-        ] ->
+        e ->
           Logger.error(
             "Agent #{agent.name} raised during execution:\n" <>
               Exception.format(:error, e, __STACKTRACE__)
@@ -450,7 +439,7 @@ defmodule Liteskill.Runs.Runner do
     })
   rescue
     # coveralls-ignore-start
-    e in [Postgrex.Error, DBConnection.ConnectionError, Ecto.StaleEntryError] ->
+    e ->
       Logger.error("Failed to update run #{run_id} after #{step}: #{Exception.message(e)}")
       # coveralls-ignore-stop
   end

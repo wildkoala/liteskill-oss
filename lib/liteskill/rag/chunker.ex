@@ -86,18 +86,16 @@ defmodule Liteskill.Rag.Chunker do
         {acc, candidate}
       else
         if current == "" do
-          {[piece | acc], ""}
+          {acc ++ [piece], ""}
         else
           overlap_text = get_overlap(current, overlap)
           next = if overlap_text == "", do: piece, else: overlap_text <> " " <> piece
-          {[current | acc], next}
+          {acc ++ [current], next}
         end
       end
     end)
-    |> then(fn
-      # coveralls-ignore-next-line
-      {acc, ""} -> Enum.reverse(acc)
-      {acc, remaining} -> Enum.reverse([remaining | acc])
+    |> then(fn {acc, remaining} ->
+      if remaining == "", do: acc, else: acc ++ [remaining]
     end)
   end
 

@@ -27,8 +27,6 @@ defmodule Liteskill.Chat do
   Read path: Context -> Ecto queries on projection tables
   """
 
-  require Logger
-
   alias Liteskill.Aggregate.Loader
   alias Liteskill.Authorization
   alias Liteskill.Chat.{Conversation, ConversationAggregate, Message, MessageChunk, Projector}
@@ -88,11 +86,6 @@ defmodule Liteskill.Chat do
         {:ok, _} = Authorization.create_owner_acl("conversation", conversation.id, params.user_id)
 
         {:ok, conversation}
-
-      # coveralls-ignore-start
-      {:error, reason} ->
-        {:error, reason}
-        # coveralls-ignore-stop
     end
   end
 
@@ -159,11 +152,6 @@ defmodule Liteskill.Chat do
           {:ok, _} = Authorization.create_owner_acl("conversation", new_conv.id, user_id)
 
           {:ok, new_conv}
-
-        # coveralls-ignore-start
-        {:error, reason} ->
-          {:error, reason}
-          # coveralls-ignore-stop
       end
     end
   end
@@ -194,11 +182,6 @@ defmodule Liteskill.Chat do
     end
   end
 
-  # NOTE: This is two sequential aggregate commands (truncate + send). If the process
-  # crashes between them, the conversation is left truncated without a replacement
-  # message. This is acceptable: the user can re-send, and the event store preserves
-  # the truncation event for auditability. A combined command would require changing
-  # the aggregate protocol.
   def edit_message(conversation_id, user_id, message_id, new_content, opts \\ []) do
     with {:ok, _conversation} <- truncate_conversation(conversation_id, user_id, message_id) do
       send_message(conversation_id, user_id, new_content, opts)
@@ -364,15 +347,13 @@ defmodule Liteskill.Chat do
   """
   def recover_stream(conversation_id, user_id) do
     with {:ok, conversation} <- authorize_conversation(conversation_id, user_id) do
-      case do_recover_stream(
-             conversation,
-             "task_crashed",
-             "Stream handler process terminated unexpectedly"
-           ) do
-        # coveralls-ignore-next-line
-        {:error, reason} -> {:error, reason}
-        _ -> {:ok, Repo.get!(Conversation, conversation_id)}
-      end
+      do_recover_stream(
+        conversation,
+        "task_crashed",
+        "Stream handler process terminated unexpectedly"
+      )
+
+      {:ok, Repo.get!(Conversation, conversation_id)}
     end
   end
 
@@ -405,23 +386,13 @@ defmodule Liteskill.Chat do
   def recover_stream_by_id(conversation_id) do
     conversation = Repo.get!(Conversation, conversation_id)
 
-    case do_recover_stream(
-           conversation,
-           "orphaned_stream",
-           "Stream recovered by periodic sweep — no active handler"
-         ) do
-      # coveralls-ignore-start
-      {:error, reason} ->
-        Logger.warning(
-          "Orphaned stream recovery failed: conversation=#{conversation_id} reason=#{inspect(reason)}"
-        )
+    do_recover_stream(
+      conversation,
+      "orphaned_stream",
+      "Stream recovered by periodic sweep — no active handler"
+    )
 
-        :error
-
-      # coveralls-ignore-stop
-      _ ->
-        :ok
-    end
+    :ok
   end
 
   # --- Internal Helpers ---
@@ -448,17 +419,10 @@ defmodule Liteskill.Chat do
         {:ok, _state, events} ->
           Projector.project_events(conversation.stream_id, events)
 
-        # coveralls-ignore-start
-        {:error, reason} ->
-          Logger.warning(
-            "Stream recovery failed: stream=#{conversation.stream_id} reason=#{inspect(reason)}"
-          )
-
-          {:error, reason}
-          # coveralls-ignore-stop
+        # coveralls-ignore-next-line
+        {:error, _reason} ->
+          :ok
       end
-    else
-      :ok
     end
   end
 
@@ -473,9 +437,6 @@ defmodule Liteskill.Chat do
     end
   end
 
-  # Returns :not_found for both missing and unauthorized conversations intentionally.
-  # This prevents resource enumeration — callers cannot distinguish "does not exist"
-  # from "exists but you lack access".
   defp authorize_conversation(conversation_id, user_id) do
     case Repo.get(Conversation, conversation_id) do
       nil ->
@@ -579,37 +540,11 @@ defmodule Liteskill.Chat do
        when type in [
               "AssistantChunkReceived",
               "AssistantStreamCompleted",
-              "AssistantStreamFailed"
+              "AssistantStreamFailed",
+              "ToolCallStarted",
+              "ToolCallCompleted"
             ] do
-    new_msg_id = Map.fetch!(id_map, data["message_id"])
-    {Map.put(data, "message_id", new_msg_id), id_map}
-  end
-
-  defp remap_event_data(%{event_type: type, data: data}, _new_conv_id, id_map)
-       when type in ["ToolCallStarted", "ToolCallCompleted"] do
-    new_msg_id = Map.fetch!(id_map, data["message_id"])
-    old_tool_use_id = data["tool_use_id"]
-
-    {new_tool_use_id, id_map} =
-      case Map.fetch(id_map, old_tool_use_id) do
-        {:ok, existing} ->
-          {existing, id_map}
-
-        :error ->
-          new_id = Ecto.UUID.generate()
-          {new_id, Map.put(id_map, old_tool_use_id, new_id)}
-      end
-
-    data =
-      data
-      |> Map.put("message_id", new_msg_id)
-      |> Map.put("tool_use_id", new_tool_use_id)
-
-    {data, id_map}
-  end
-
-  defp remap_event_data(%{event_type: "ConversationTruncated", data: data}, _new_conv_id, id_map) do
-    new_msg_id = Map.fetch!(id_map, data["message_id"])
+    new_msg_id = Map.get(id_map, data["message_id"], data["message_id"])
     {Map.put(data, "message_id", new_msg_id), id_map}
   end
 

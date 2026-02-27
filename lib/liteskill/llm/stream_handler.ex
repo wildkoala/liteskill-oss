@@ -43,6 +43,10 @@ defmodule Liteskill.LLM.StreamHandler do
     * `:stream_fn` - Override the LLM streaming function (for testing)
   """
   def handle_stream(stream_id, messages, opts \\ []) do
+    do_handle_stream(stream_id, messages, opts)
+  end
+
+  defp do_handle_stream(stream_id, messages, opts) do
     cost_limit = Keyword.get(opts, :cost_limit)
     conversation_id = Keyword.get(opts, :conversation_id)
 
@@ -876,7 +880,7 @@ defmodule Liteskill.LLM.StreamHandler do
     output =
       case result do
         {:ok, data} -> data
-        {:error, err} -> %{"error" => "tool execution failed: #{format_tool_error(err)}"}
+        {:error, _err} -> %{"error" => "tool execution failed"}
       end
 
     command =
@@ -1031,10 +1035,4 @@ defmodule Liteskill.LLM.StreamHandler do
         {:error, reason}
     end
   end
-
-  defp format_tool_error(err) when is_binary(err), do: err
-  # coveralls-ignore-start
-  defp format_tool_error(err) when is_exception(err), do: Exception.message(err)
-  defp format_tool_error(err), do: inspect(err)
-  # coveralls-ignore-stop
 end

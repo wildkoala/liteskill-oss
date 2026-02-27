@@ -30,12 +30,7 @@ defmodule Liteskill.Rag.RequestLogger do
       |> Repo.insert()
     rescue
       # coveralls-ignore-start
-      _e in [
-        Postgrex.Error,
-        DBConnection.ConnectionError,
-        Ecto.InvalidChangesetError,
-        Ecto.ChangeError
-      ] ->
+      _ ->
         :ok
         # coveralls-ignore-stop
     end

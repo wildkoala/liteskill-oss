@@ -42,6 +42,8 @@ defmodule Liteskill.Application do
         Liteskill.OpenRouter.StateStore,
         # Periodic sweep of stale rate limiter ETS buckets
         LiteskillWeb.Plugs.RateLimiter.Sweeper,
+        # Periodic sweep of expired server-side sessions
+        Liteskill.Accounts.SessionSweeper,
         # Task supervisor for LLM streaming and other async work
         {Task.Supervisor, name: Liteskill.TaskSupervisor},
         # Stream registry — monitors active LLM stream tasks, triggers recovery on crash
@@ -61,9 +63,9 @@ defmodule Liteskill.Application do
         # Desktop shutdown is handled by Tauri's kill_sidecar (SIGTERM/taskkill).
         # No heartbeat socket or ShutdownManager needed.
         # coveralls-ignore-stop
-        # Periodic sweep of expired server-side sessions (low-priority, placed late
-        # in rest_for_one tree to minimize blast radius on crash)
-        Liteskill.Accounts.SessionSweeper,
+        # App registry and supervisor — must start before Endpoint
+        Liteskill.App.Registry,
+        Liteskill.App.Supervisor,
         # Start to serve requests, typically the last entry
         LiteskillWeb.Endpoint
       ]

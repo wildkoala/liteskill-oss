@@ -14,7 +14,11 @@ defmodule LiteskillWeb.PasswordAuthController do
 
       case Accounts.register_user(attrs) do
         {:ok, user} ->
-          conn_info = SessionHelpers.conn_info(conn)
+          conn_info = %{
+            ip_address: SessionHelpers.client_ip(conn),
+            user_agent: SessionHelpers.client_user_agent(conn)
+          }
+
           {:ok, session} = Accounts.create_session(user.id, conn_info)
 
           Accounts.log_auth_event(%{
@@ -55,7 +59,10 @@ defmodule LiteskillWeb.PasswordAuthController do
     # the full admin@liteskill.local address.
     email = if email == "admin", do: Accounts.User.admin_email(), else: email
 
-    conn_info = SessionHelpers.conn_info(conn)
+    conn_info = %{
+      ip_address: SessionHelpers.client_ip(conn),
+      user_agent: SessionHelpers.client_user_agent(conn)
+    }
 
     case Accounts.authenticate_by_email_password(email, password) do
       {:ok, user} ->

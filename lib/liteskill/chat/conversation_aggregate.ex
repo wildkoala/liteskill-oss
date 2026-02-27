@@ -7,8 +7,6 @@ defmodule Liteskill.Chat.ConversationAggregate do
 
   @behaviour Liteskill.Aggregate
 
-  require Logger
-
   alias Liteskill.Chat.Events
 
   defstruct [
@@ -53,13 +51,6 @@ defmodule Liteskill.Chat.ConversationAggregate do
       when status != :created do
     {:error, :already_created}
   end
-
-  # coveralls-ignore-start - :created state unreachable through normal Chat context flow
-  def handle_command(%{status: :created}, {:add_user_message, _}) do
-    {:error, :not_active}
-  end
-
-  # coveralls-ignore-stop
 
   def handle_command(%{status: :archived}, {:add_user_message, _}) do
     {:error, :conversation_archived}
@@ -185,8 +176,7 @@ defmodule Liteskill.Chat.ConversationAggregate do
     {:error, :not_streaming}
   end
 
-  def handle_command(%{status: status}, {:complete_tool_call, params})
-      when status in [:streaming, :active] do
+  def handle_command(%{status: :streaming}, {:complete_tool_call, params}) do
     now = iso_now()
 
     event =
@@ -203,16 +193,14 @@ defmodule Liteskill.Chat.ConversationAggregate do
     {:ok, [event]}
   end
 
-  def handle_command(%{status: _status}, {:complete_tool_call, _}) do
+  def handle_command(%{status: status}, {:complete_tool_call, _})
+      when status != :streaming do
     {:error, :not_streaming}
   end
 
   def handle_command(%{status: :archived}, {:update_title, _}) do
     {:error, :conversation_archived}
   end
-
-  # coveralls-ignore-next-line
-  def handle_command(%{status: :created}, {:update_title, _}), do: {:error, :not_active}
 
   def handle_command(%{status: _status}, {:update_title, params}) do
     now = iso_now()
@@ -229,9 +217,6 @@ defmodule Liteskill.Chat.ConversationAggregate do
   def handle_command(%{status: :archived}, {:archive, _}) do
     {:error, :already_archived}
   end
-
-  # coveralls-ignore-next-line
-  def handle_command(%{status: :created}, {:archive, _}), do: {:error, :not_active}
 
   def handle_command(%{status: _status}, {:archive, _params}) do
     now = iso_now()
@@ -270,13 +255,6 @@ defmodule Liteskill.Chat.ConversationAggregate do
       {:error, :message_not_found}
     end
   end
-
-  # coveralls-ignore-start
-  def handle_command(_state, {command_type, _params}) do
-    {:error, {:unknown_command, command_type}}
-  end
-
-  # coveralls-ignore-stop
 
   defp iso_now, do: DateTime.utc_now() |> DateTime.to_iso8601()
 
@@ -321,13 +299,12 @@ defmodule Liteskill.Chat.ConversationAggregate do
     }
   end
 
+  # coveralls-ignore-start - defensive guard for out-of-order event replay
   def apply_event(%{current_stream: nil} = state, %{event_type: "AssistantChunkReceived"}) do
-    Logger.warning(
-      "AssistantChunkReceived received with no active stream — event stream may be corrupted"
-    )
-
     state
   end
+
+  # coveralls-ignore-stop
 
   def apply_event(state, %{event_type: "AssistantChunkReceived", data: data}) do
     chunk = %{
@@ -364,13 +341,12 @@ defmodule Liteskill.Chat.ConversationAggregate do
     %{state | status: :active, current_stream: nil}
   end
 
+  # coveralls-ignore-start - defensive guard for out-of-order event replay
   def apply_event(%{current_stream: nil} = state, %{event_type: "ToolCallStarted"}) do
-    Logger.warning(
-      "ToolCallStarted received with no active stream — event stream may be corrupted"
-    )
-
     state
   end
+
+  # coveralls-ignore-stop
 
   def apply_event(state, %{event_type: "ToolCallStarted", data: data}) do
     tool_call = %{

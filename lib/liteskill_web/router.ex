@@ -21,10 +21,6 @@ defmodule LiteskillWeb.Router do
     plug LiteskillWeb.Plugs.Auth, :require_authenticated_user
   end
 
-  pipeline :auth_rate_limit do
-    plug LiteskillWeb.Plugs.RateLimiter, limit: 60, window_ms: 60_000
-  end
-
   # Session bridge for LiveView auth
   scope "/auth", LiteskillWeb do
     pipe_through [:browser]
@@ -92,6 +88,12 @@ defmodule LiteskillWeb.Router do
     get "/:space_id/export", WikiExportController, :export
   end
 
+  # App routes (browser)
+  scope "/apps" do
+    pipe_through [:browser, :require_auth]
+    forward "/", LiteskillWeb.Plugs.AppRouter
+  end
+
   # Authenticated LiveView routes
   scope "/", LiteskillWeb do
     pipe_through [:browser]
@@ -133,9 +135,9 @@ defmodule LiteskillWeb.Router do
     end
   end
 
-  # Password auth API routes (no auth required, strict rate limit)
+  # Password auth API routes (no auth required)
   scope "/auth", LiteskillWeb do
-    pipe_through [:api, :auth_rate_limit]
+    pipe_through [:api]
 
     post "/register", PasswordAuthController, :register
     post "/login", PasswordAuthController, :login
@@ -168,6 +170,12 @@ defmodule LiteskillWeb.Router do
       post "/members", GroupController, :add_member
       delete "/members/:user_id", GroupController, :remove_member
     end
+  end
+
+  # App routes (API)
+  scope "/api/apps" do
+    pipe_through [:api, :require_auth]
+    forward "/", LiteskillWeb.Plugs.AppRouter
   end
 
   # Enable LiveDashboard and Swoosh mailbox preview in development

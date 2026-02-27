@@ -16,7 +16,11 @@ defmodule LiteskillWeb.SessionController do
   def create(conn, %{"token" => token}) do
     case Phoenix.Token.verify(LiteskillWeb.Endpoint, "user_session", token, max_age: @max_age) do
       {:ok, user_id} ->
-        conn_info = SessionHelpers.conn_info(conn)
+        conn_info = %{
+          ip_address: SessionHelpers.client_ip(conn),
+          user_agent: SessionHelpers.client_user_agent(conn)
+        }
+
         {:ok, session} = Accounts.create_session(user_id, conn_info)
 
         Accounts.log_auth_event(%{
@@ -43,20 +47,20 @@ defmodule LiteskillWeb.SessionController do
     session_token = get_session(conn, :session_token)
 
     if session_token do
-      case Accounts.delete_and_return_session(session_token) do
-        {:ok, session} ->
-          conn_info = SessionHelpers.conn_info(conn)
-
+      case Accounts.validate_session(session_token) do
+        %{user_id: user_id} ->
           Accounts.log_auth_event(%{
             event_type: "logout",
-            user_id: session.user_id,
-            ip_address: conn_info.ip_address,
-            user_agent: conn_info.user_agent
+            user_id: user_id,
+            ip_address: SessionHelpers.client_ip(conn),
+            user_agent: SessionHelpers.client_user_agent(conn)
           })
 
-        :error ->
+        _ ->
           :ok
       end
+
+      Accounts.delete_session(session_token)
     end
 
     conn

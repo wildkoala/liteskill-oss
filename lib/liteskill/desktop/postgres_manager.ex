@@ -373,10 +373,8 @@ defmodule Liteskill.Desktop.PostgresManager do
         if System.monotonic_time(:millisecond) >= deadline do
           {:error, :pg_ready_timeout}
         else
-          receive do
-          after
-            state.pg_ready_poll_ms -> do_wait_for_ready(state, pg_isready, deadline)
-          end
+          Process.sleep(state.pg_ready_poll_ms)
+          do_wait_for_ready(state, pg_isready, deadline)
         end
     end
   end

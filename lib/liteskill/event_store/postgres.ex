@@ -18,8 +18,8 @@ defmodule Liteskill.EventStore.Postgres do
 
   @impl true
   def append_events(stream_id, expected_version, events_data) do
-    result =
-      Repo.transaction(fn ->
+    Repo.transaction(fn ->
+      events =
         events_data
         |> Enum.with_index(expected_version + 1)
         |> Enum.map(fn {event_data, version} ->
@@ -32,18 +32,10 @@ defmodule Liteskill.EventStore.Postgres do
           }
           |> Repo.insert!()
         end)
-      end)
 
-    case result do
-      {:ok, events} ->
-        broadcast_events(stream_id, events)
-        {:ok, events}
-
-      # coveralls-ignore-start
-      {:error, _} = error ->
-        error
-        # coveralls-ignore-stop
-    end
+      broadcast_events(stream_id, events)
+      events
+    end)
   rescue
     _e in [Ecto.ConstraintError] ->
       {:error, :wrong_expected_version}

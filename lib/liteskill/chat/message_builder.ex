@@ -24,7 +24,7 @@ defmodule Liteskill.Chat.MessageBuilder do
       case msg.role do
         "user" ->
           if msg.content && msg.content != "" do
-            [%{"role" => "user", "content" => [%{"text" => msg.content}]} | acc]
+            acc ++ [%{"role" => "user", "content" => [%{"text" => msg.content}]}]
           else
             acc
           end
@@ -33,7 +33,6 @@ defmodule Liteskill.Chat.MessageBuilder do
           build_assistant_message(msg, acc)
       end
     end)
-    |> Enum.reverse()
     |> merge_consecutive_roles()
   end
 
@@ -74,14 +73,13 @@ defmodule Liteskill.Chat.MessageBuilder do
             }
           end)
 
-        # Prepend in reverse order so Enum.reverse produces [assistant_msg, tool_results_msg]
-        [%{"role" => "user", "content" => tool_results}, assistant_msg | acc]
+        acc ++ [assistant_msg, %{"role" => "user", "content" => tool_results}]
       else
-        [assistant_msg | acc]
+        acc ++ [assistant_msg]
       end
     else
       if msg.content && msg.content != "" do
-        [%{"role" => "assistant", "content" => [%{"text" => msg.content}]} | acc]
+        acc ++ [%{"role" => "assistant", "content" => [%{"text" => msg.content}]}]
       else
         acc
       end

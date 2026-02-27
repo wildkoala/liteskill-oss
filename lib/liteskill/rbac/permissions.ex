@@ -51,12 +51,14 @@ defmodule Liteskill.Rbac.Permissions do
 
   @permission_set MapSet.new(@permissions)
 
-  def all_permissions, do: @permissions
+  def all_permissions, do: @permissions ++ Liteskill.App.Registry.all_permissions()
 
-  def default_permissions, do: @default_permissions
+  def default_permissions, do: @default_permissions ++ Liteskill.App.Registry.all_default_permissions()
 
   def valid?("*"), do: true
-  def valid?(permission), do: MapSet.member?(@permission_set, permission)
+
+  def valid?(permission),
+    do: MapSet.member?(@permission_set, permission) or permission in Liteskill.App.Registry.all_permissions()
 
   def grouped do
     @permissions
