@@ -42,7 +42,6 @@ defmodule Liteskill.Rag.CohereClient do
         {:ok, %{status: status, body: body}} ->
           {:error, %{status: status, body: body}}
 
-        # coveralls-ignore-next-line
         {:error, reason} ->
           {:error, reason}
       end

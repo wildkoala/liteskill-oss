@@ -11,7 +11,6 @@ defmodule Liteskill.Rag.RequestLogger do
       case attrs.result do
         {:ok, _} -> {"success", nil}
         {:error, %{status: s}} -> {"error", "HTTP #{s}"}
-        # coveralls-ignore-next-line
         {:error, _} -> {"error", "request_failed"}
       end
 

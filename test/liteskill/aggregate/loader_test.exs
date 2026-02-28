@@ -210,5 +210,59 @@ defmodule Liteskill.Aggregate.LoaderTest do
     end
   end
 
+  describe "snapshot with streaming state and tool_calls" do
+    defmodule StreamingAggregate do
+      @behaviour Liteskill.Aggregate
+      defstruct status: :created, current_stream: nil
+
+      @impl true
+      def init, do: %__MODULE__{}
+
+      @impl true
+      def apply_event(state, _event), do: state
+
+      @impl true
+      def handle_command(_state, _command), do: {:ok, []}
+    end
+
+    test "restores tool_call status atoms from snapshot" do
+      stream = stream_id()
+
+      Store.save_snapshot(stream, 10, "StreamingAggregate", %{
+        "status" => "streaming",
+        "current_stream" => %{
+          "message_id" => "msg-1",
+          "tool_calls" => [
+            %{
+              "tool_use_id" => "tu-1",
+              "tool_name" => "test",
+              "input" => %{},
+              "status" => "started"
+            },
+            %{
+              "tool_use_id" => "tu-2",
+              "tool_name" => "test2",
+              "input" => %{},
+              "status" => "completed"
+            },
+            %{"tool_use_id" => "tu-3", "tool_name" => "test3", "input" => %{}}
+          ]
+        }
+      })
+
+      {state, version} = Loader.load(StreamingAggregate, stream)
+      assert version == 10
+      assert state.status == :streaming
+      assert state.current_stream != nil
+
+      tcs = state.current_stream.tool_calls
+      assert length(tcs) == 3
+      assert Enum.at(tcs, 0).status == :started
+      assert Enum.at(tcs, 1).status == :completed
+      # Third tool_call has no status — exercises the catch-all branch
+      refute Map.has_key?(Enum.at(tcs, 2), :status)
+    end
+  end
+
   defp stream_id, do: "test-counter-#{System.unique_integer([:positive])}"
 end

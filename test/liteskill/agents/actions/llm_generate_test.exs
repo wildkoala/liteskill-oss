@@ -1377,6 +1377,73 @@ defmodule Liteskill.Agents.Actions.LlmGenerateTest do
       body = Agent.get(captured_body, & &1)
       assert body["max_tokens"] == 2048
     end
+
+    test "preserves explicit max_tokens over model default", %{
+      owner: owner,
+      provider: provider
+    } do
+      {:ok, model} =
+        LlmModels.create_model(%{
+          name: "MaxOut Explicit #{System.unique_integer([:positive])}",
+          model_id: "max-out-explicit",
+          provider_id: provider.id,
+          user_id: owner.id,
+          max_output_tokens: 2048,
+          instance_wide: true
+        })
+
+      captured_body = Agent.start_link(fn -> nil end) |> elem(1)
+
+      Req.Test.stub(Liteskill.Agents.Actions.LlmGenerateTest, fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        Agent.update(captured_body, fn _ -> Jason.decode!(body) end)
+
+        response = %{
+          "id" => "msg_test_#{System.unique_integer([:positive])}",
+          "type" => "message",
+          "role" => "assistant",
+          "content" => [%{"type" => "text", "text" => "response"}],
+          "model" => "max-out-explicit",
+          "stop_reason" => "end_turn",
+          "usage" => %{"input_tokens" => 10, "output_tokens" => 5}
+        }
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(response))
+      end)
+
+      # Pass max_tokens via test_req_opts so it's already in req_opts
+      Application.put_env(:liteskill, :test_req_opts,
+        req_http_options: [plug: {Req.Test, __MODULE__}],
+        max_tokens: 4096
+      )
+
+      Application.put_env(:req_llm, :anthropic_api_key, "test-api-key")
+
+      context =
+        make_context(%{
+          agent_name: "MaxOutExplicitAgent",
+          system_prompt: "test",
+          backstory: "",
+          opinions: %{},
+          role: "worker",
+          strategy: "direct",
+          llm_model: LlmModels.get_model!(model.id),
+          tools: [],
+          tool_servers: %{},
+          user_id: owner.id,
+          prompt: "test",
+          prior_context: "",
+          cost_limit: nil
+        })
+
+      assert {:ok, _result} = LlmGenerate.run(%{}, context)
+
+      body = Agent.get(captured_body, & &1)
+      # Should use the explicit 4096, not the model's 2048
+      assert body["max_tokens"] == 4096
+    end
   end
 
   describe "max_iterations" do

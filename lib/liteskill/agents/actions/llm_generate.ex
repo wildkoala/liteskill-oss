@@ -38,15 +38,17 @@ defmodule Liteskill.Agents.Actions.LlmGenerate do
     if state[:llm_model] do
       {system_prompt, llm_context} =
         case state[:resume_messages] do
-          # coveralls-ignore-start
           messages when is_list(messages) and messages != [] ->
+            msg_count = length(messages)
+
+            # coveralls-ignore-start — Logger macro wraps string in lazy fn invisible to coverage
             Logger.info(
-              "LlmGenerate: resuming #{state[:agent_name]} from #{length(messages)} saved messages"
+              "LlmGenerate: resuming #{state[:agent_name]} from #{msg_count} saved messages"
             )
 
-            deserialize_context(messages)
+            # coveralls-ignore-stop
 
-          # coveralls-ignore-stop
+            deserialize_context(messages)
 
           _ ->
             system_prompt = build_system_prompt(state)
@@ -322,7 +324,6 @@ defmodule Liteskill.Agents.Actions.LlmGenerate do
     req_opts = Keyword.put(req_opts, :system_prompt, system_prompt)
 
     # Default to model's max_output_tokens if configured and no explicit max_tokens
-    # coveralls-ignore-start
     req_opts =
       if Keyword.has_key?(req_opts, :max_tokens) do
         req_opts
@@ -335,8 +336,6 @@ defmodule Liteskill.Agents.Actions.LlmGenerate do
             req_opts
         end
       end
-
-    # coveralls-ignore-stop
 
     tools = state[:tools] || []
 

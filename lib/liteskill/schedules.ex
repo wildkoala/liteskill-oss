@@ -182,7 +182,6 @@ defmodule Liteskill.Schedules do
   defp parse_field("*/" <> step, min, max) do
     case Integer.parse(step) do
       {n, ""} when n > 0 -> {:step, n, min, max}
-      # coveralls-ignore-next-line
       _ -> :any
     end
   end
@@ -243,7 +242,6 @@ defmodule Liteskill.Schedules do
   defp shift_to_timezone(dt, tz) do
     case DateTime.shift_zone(dt, tz) do
       {:ok, shifted} -> DateTime.to_naive(shifted)
-      # coveralls-ignore-next-line
       _ -> DateTime.to_naive(dt)
     end
   end
@@ -260,14 +258,12 @@ defmodule Liteskill.Schedules do
       {:ok, dt} ->
         case DateTime.shift_zone(dt, "Etc/UTC") do
           {:ok, utc} -> utc
-          # coveralls-ignore-next-line
+          # coveralls-ignore-next-line — shift_zone to Etc/UTC always succeeds
           _ -> DateTime.from_naive!(naive, "Etc/UTC")
         end
 
-      # coveralls-ignore-start
       _ ->
         DateTime.from_naive!(naive, "Etc/UTC")
-        # coveralls-ignore-stop
     end
   end
 

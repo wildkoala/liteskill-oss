@@ -64,6 +64,88 @@ defmodule Liteskill.Rag.EmbeddingClientTest do
     end
   end
 
+  describe "embed/2 with DB Bedrock credentials (no model configured)" do
+    test "uses DB provider credentials when available", %{owner: owner} do
+      # Create an instance-wide active Bedrock provider in DB
+      {:ok, _provider} =
+        Liteskill.LlmProviders.create_provider(%{
+          name: "DB Bedrock",
+          provider_type: "amazon_bedrock",
+          api_key: "db-bedrock-token",
+          provider_config: %{"region" => "us-west-2"},
+          user_id: owner.id,
+          instance_wide: true
+        })
+
+      embedding = List.duplicate(0.1, 1024)
+
+      Req.Test.stub(EmbeddingClient, fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(
+          200,
+          Jason.encode!(%{"embeddings" => %{"float" => [embedding]}})
+        )
+      end)
+
+      assert {:ok, [^embedding]} =
+               EmbeddingClient.embed(
+                 ["hello"],
+                 input_type: "search_query",
+                 user_id: owner.id,
+                 plug: {Req.Test, EmbeddingClient}
+               )
+    end
+  end
+
+  describe "embed/2 with Bedrock provider (nil api_key)" do
+    setup %{owner: owner} do
+      {:ok, provider} =
+        Liteskill.LlmProviders.create_provider(%{
+          name: "Bedrock No Key",
+          provider_type: "amazon_bedrock",
+          provider_config: %{"region" => "us-east-1"},
+          user_id: owner.id
+        })
+
+      {:ok, model} =
+        Liteskill.LlmModels.create_model(%{
+          name: "Cohere Embed NoKey",
+          model_id: "us.cohere.embed-v4:0",
+          model_type: "embedding",
+          instance_wide: true,
+          provider_id: provider.id,
+          user_id: owner.id
+        })
+
+      Settings.get()
+      {:ok, _} = Settings.update_embedding_model(model.id)
+
+      %{provider: provider, model: model}
+    end
+
+    test "embeds without api_key (uses env credentials)", %{owner: owner} do
+      embedding = List.duplicate(0.1, 1024)
+
+      Req.Test.stub(EmbeddingClient, fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(
+          200,
+          Jason.encode!(%{"embeddings" => %{"float" => [embedding]}})
+        )
+      end)
+
+      assert {:ok, [^embedding]} =
+               EmbeddingClient.embed(
+                 ["hello"],
+                 input_type: "search_query",
+                 user_id: owner.id,
+                 plug: {Req.Test, EmbeddingClient}
+               )
+    end
+  end
+
   describe "embed/2 with Bedrock provider" do
     setup %{owner: owner} do
       {:ok, provider} =
@@ -176,6 +258,20 @@ defmodule Liteskill.Rag.EmbeddingClientTest do
       end)
 
       assert {:error, _} =
+               EmbeddingClient.embed(
+                 ["hello"],
+                 input_type: "search_query",
+                 user_id: owner.id,
+                 plug: {Req.Test, EmbeddingClient}
+               )
+    end
+
+    test "returns error on transport failure", %{owner: owner} do
+      Req.Test.stub(EmbeddingClient, fn conn ->
+        Req.Test.transport_error(conn, :timeout)
+      end)
+
+      assert {:error, %Req.TransportError{reason: :timeout}} =
                EmbeddingClient.embed(
                  ["hello"],
                  input_type: "search_query",

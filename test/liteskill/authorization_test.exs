@@ -307,7 +307,7 @@ defmodule Liteskill.AuthorizationTest do
                Authorization.revoke_access(etype, eid, user.id, Ecto.UUID.generate())
     end
 
-    test "viewer cannot revoke", %{
+    test "viewer cannot revoke other user", %{
       user: user,
       other: other,
       viewer: viewer,
@@ -316,6 +316,15 @@ defmodule Liteskill.AuthorizationTest do
     } do
       {:ok, _} = Authorization.grant_access(etype, eid, user.id, viewer.id, "viewer")
 
+      assert {:error, :forbidden} =
+               Authorization.revoke_access(etype, eid, viewer.id, other.id)
+    end
+
+    test "returns no_access when revoker has no access", %{
+      other: other,
+      entity_id: eid,
+      entity_type: etype
+    } do
       assert {:error, :no_access} =
                Authorization.revoke_access(etype, eid, Ecto.UUID.generate(), other.id)
     end
@@ -328,6 +337,26 @@ defmodule Liteskill.AuthorizationTest do
       {:ok, _} = Authorization.grant_group_access(etype, eid, user.id, group.id, "viewer")
 
       assert {:ok, _} = Authorization.revoke_group_access(etype, eid, user.id, group.id)
+    end
+
+    test "cannot revoke group ACL with owner role", %{
+      user: user,
+      entity_id: eid,
+      entity_type: etype
+    } do
+      {:ok, _} = Authorization.create_owner_acl(etype, eid, user.id)
+      {:ok, group} = Groups.create_group("Owner Group", user.id)
+
+      # Directly insert a group ACL with owner role (bypassing grant_group_access validation)
+      Repo.insert!(%EntityAcl{
+        entity_type: etype,
+        entity_id: eid,
+        group_id: group.id,
+        role: "owner"
+      })
+
+      assert {:error, :cannot_revoke_owner} =
+               Authorization.revoke_group_access(etype, eid, user.id, group.id)
     end
 
     test "returns not_found for non-existent group ACL", %{

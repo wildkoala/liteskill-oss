@@ -60,6 +60,20 @@ defmodule Liteskill.Accounts.SessionSweeperTest do
     end
   end
 
+  describe "handle_info catch-all" do
+    test "ignores unknown messages" do
+      pid =
+        start_supervised!(
+          {SessionSweeper, name: :"sweeper_test_#{System.unique_integer()}", interval_ms: 600_000}
+        )
+
+      send(pid, :random_message)
+      _ = :sys.get_state(pid)
+
+      assert Process.alive?(pid)
+    end
+  end
+
   describe "periodic scheduling" do
     test "schedules next sweep after handling :sweep" do
       pid =

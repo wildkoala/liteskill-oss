@@ -833,6 +833,25 @@ defmodule Liteskill.ChatTest do
       {:ok, conv} = Chat.create_conversation(%{user_id: user.id, title: "Private"})
       assert {:error, :not_found} = Chat.recover_stream(conv.id, other.id)
     end
+
+    test "returns error when aggregate is not streaming but projection has streaming message",
+         %{user: user} do
+      {:ok, conv} = Chat.create_conversation(%{user_id: user.id, title: "Mismatched"})
+
+      # Insert a fake streaming message — aggregate is active, not streaming
+      Repo.insert!(%Liteskill.Chat.Message{
+        id: Ecto.UUID.generate(),
+        conversation_id: conv.id,
+        role: "assistant",
+        status: "streaming",
+        position: 1,
+        content: ""
+      })
+
+      import ExUnit.CaptureLog
+      log = capture_log(fn -> assert {:error, _} = Chat.recover_stream(conv.id, user.id) end)
+      assert log =~ "recovery failed" or log =~ "not_streaming"
+    end
   end
 
   describe "list_stuck_streaming/1" do
@@ -1176,6 +1195,33 @@ defmodule Liteskill.ChatTest do
       # Verify the fork succeeded (ConversationTruncated message_id was remapped correctly)
       {:ok, forked_conv} = Chat.get_conversation(forked.id, user.id)
       assert forked_conv.title != nil
+    end
+  end
+
+  describe "recover_stream_by_id/1 error path" do
+    import ExUnit.CaptureLog
+
+    test "logs warning when recovery fails", %{user: user} do
+      {:ok, conv} = Chat.create_conversation(%{user_id: user.id, title: "Recovery Test"})
+
+      # Insert a fake "streaming" message in the DB so do_recover_stream finds it.
+      # The aggregate is in :active state, so fail_stream will return {:error, :not_streaming}.
+      Repo.insert!(%Liteskill.Chat.Message{
+        id: Ecto.UUID.generate(),
+        conversation_id: conv.id,
+        role: "assistant",
+        status: "streaming",
+        position: 1,
+        content: ""
+      })
+
+      log =
+        capture_log(fn ->
+          result = Chat.recover_stream_by_id(conv.id)
+          assert result == :error
+        end)
+
+      assert log =~ "recovery failed" or log =~ "not_streaming"
     end
   end
 end

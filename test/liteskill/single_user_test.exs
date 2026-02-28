@@ -44,6 +44,18 @@ defmodule Liteskill.SingleUserTest do
       assert updated.password_hash != nil
     end
 
+    test "returns :noop when admin user does not exist" do
+      # Delete the admin user so auto_user() returns nil
+      admin_email = Liteskill.Accounts.User.admin_email()
+
+      case Liteskill.Repo.get_by(Liteskill.Accounts.User, email: admin_email) do
+        nil -> :ok
+        user -> Liteskill.Repo.delete!(user)
+      end
+
+      assert :noop = SingleUser.auto_provision_admin()
+    end
+
     test "is a no-op when admin already has a password" do
       admin = Accounts.ensure_admin_user()
       {:ok, admin} = Accounts.setup_admin_password(admin, "a_secure_password1")

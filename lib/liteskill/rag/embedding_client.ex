@@ -102,10 +102,8 @@ defmodule Liteskill.Rag.EmbeddingClient do
       {:ok, %{status: status, body: body}} ->
         {:error, %{status: status, body: body}}
 
-      # coveralls-ignore-start — Req.Test always returns {:ok, _}
       {:error, reason} ->
         {:error, reason}
-        # coveralls-ignore-stop
     end
   end
 
@@ -132,7 +130,6 @@ defmodule Liteskill.Rag.EmbeddingClient do
         req_opts =
           if provider.api_key,
             do: Keyword.put(req_opts, :api_key, provider.api_key),
-            # coveralls-ignore-next-line
             else: req_opts
 
         {"amazon_bedrock:#{model.model_id}", req_opts, model.model_id}
@@ -198,11 +195,9 @@ defmodule Liteskill.Rag.EmbeddingClient do
       end
 
     case db_creds do
-      # coveralls-ignore-start — tested via CohereClient.rerank DB credentials test
       %{api_key: token, region: region} ->
         %{token: token, region: region}
 
-      # coveralls-ignore-stop
       nil ->
         config = Application.get_env(:liteskill, Liteskill.LLM, [])
 

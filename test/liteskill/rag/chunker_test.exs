@@ -115,5 +115,14 @@ defmodule Liteskill.Rag.ChunkerTest do
       [chunk] = Chunker.split("Hi")
       assert chunk.token_count >= 1
     end
+
+    test "handles multi-byte text where pieces exceed chunk byte size" do
+      # Each emoji is 4 bytes. force_split uses graphemes (not bytes), so two emojis
+      # become one piece of 8 bytes. With chunk_size=3, pieces exceed the byte limit
+      # in merge_chunks, exercising the {acc, ""} -> Enum.reverse(acc) branch.
+      text = "\u{1F389}\u{1F389} \u{1F389}\u{1F389}"
+      result = Chunker.split(text, chunk_size: 3, overlap: 0)
+      assert length(result) == 2
+    end
   end
 end

@@ -369,7 +369,6 @@ defmodule Liteskill.Chat do
              "task_crashed",
              "Stream handler process terminated unexpectedly"
            ) do
-        # coveralls-ignore-next-line
         {:error, reason} -> {:error, reason}
         _ -> {:ok, Repo.get!(Conversation, conversation_id)}
       end
@@ -410,7 +409,6 @@ defmodule Liteskill.Chat do
            "orphaned_stream",
            "Stream recovered by periodic sweep — no active handler"
          ) do
-      # coveralls-ignore-start
       {:error, reason} ->
         Logger.warning(
           "Orphaned stream recovery failed: conversation=#{conversation_id} reason=#{inspect(reason)}"
@@ -418,7 +416,6 @@ defmodule Liteskill.Chat do
 
         :error
 
-      # coveralls-ignore-stop
       _ ->
         :ok
     end
@@ -448,14 +445,12 @@ defmodule Liteskill.Chat do
         {:ok, _state, events} ->
           Projector.project_events(conversation.stream_id, events)
 
-        # coveralls-ignore-start
         {:error, reason} ->
           Logger.warning(
             "Stream recovery failed: stream=#{conversation.stream_id} reason=#{inspect(reason)}"
           )
 
           {:error, reason}
-          # coveralls-ignore-stop
       end
     else
       :ok

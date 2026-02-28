@@ -66,10 +66,8 @@ defmodule Liteskill.OpenRouter do
       {:ok, %Req.Response{status: status}} ->
         {:error, "OpenRouter returned status #{status}"}
 
-      # coveralls-ignore-start — Req.Test cannot simulate transport errors
       {:error, reason} ->
         {:error, "OpenRouter request failed: #{inspect(reason)}"}
-        # coveralls-ignore-stop
     end
   end
 

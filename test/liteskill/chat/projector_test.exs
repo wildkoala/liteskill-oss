@@ -1106,6 +1106,61 @@ defmodule Liteskill.Chat.ProjectorTest do
     end
   end
 
+  describe "missing message defensive guards" do
+    import ExUnit.CaptureLog
+
+    test "AssistantChunkReceived with non-existent message_id logs warning", %{user: user} do
+      {stream_id, _} = create_conversation(user)
+      fake_message_id = Ecto.UUID.generate()
+
+      chunk_event = %Liteskill.EventStore.Event{
+        event_type: "AssistantChunkReceived",
+        data: %{
+          "message_id" => fake_message_id,
+          "chunk_index" => 0,
+          "delta_type" => "text_delta",
+          "delta_text" => "orphaned chunk"
+        },
+        stream_id: stream_id,
+        stream_version: 2,
+        metadata: %{}
+      }
+
+      log =
+        capture_log(fn ->
+          Projector.project_events(stream_id, [chunk_event])
+        end)
+
+      assert log =~ "message not found for chunk"
+    end
+
+    test "AssistantStreamCompleted with non-existent message_id logs warning", %{user: user} do
+      {stream_id, _} = create_conversation(user)
+      fake_message_id = Ecto.UUID.generate()
+
+      completion_event = %Liteskill.EventStore.Event{
+        event_type: "AssistantStreamCompleted",
+        data: %{
+          "message_id" => fake_message_id,
+          "full_content" => "Hello world",
+          "stop_reason" => "end_turn",
+          "input_tokens" => 10,
+          "output_tokens" => 5
+        },
+        stream_id: stream_id,
+        stream_version: 2,
+        metadata: %{}
+      }
+
+      log =
+        capture_log(fn ->
+          Projector.project_events(stream_id, [completion_event])
+        end)
+
+      assert log =~ "message not found for stream completion"
+    end
+  end
+
   defp create_conversation(user) do
     conversation_id = Ecto.UUID.generate()
     stream_id = "conversation-#{conversation_id}"

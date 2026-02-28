@@ -48,6 +48,14 @@ defmodule Liteskill.OpenRouter.ModelsTest do
       assert {:error, "OpenRouter returned status 503"} = Models.list_models()
     end
 
+    test "returns error on transport failure" do
+      Req.Test.stub(Models, fn conn ->
+        Req.Test.transport_error(conn, :timeout)
+      end)
+
+      assert {:error, "OpenRouter request failed: " <> _} = Models.list_models()
+    end
+
     test "skips entries without id and name" do
       Req.Test.stub(Models, fn conn ->
         data = [
@@ -110,6 +118,14 @@ defmodule Liteskill.OpenRouter.ModelsTest do
       end)
 
       assert {:error, "OpenRouter returned status 429"} = Models.list_embedding_models()
+    end
+
+    test "returns error on transport failure" do
+      Req.Test.stub(Models, fn conn ->
+        Req.Test.transport_error(conn, :closed)
+      end)
+
+      assert {:error, "OpenRouter request failed: " <> _} = Models.list_embedding_models()
     end
 
     test "handles numeric pricing values" do

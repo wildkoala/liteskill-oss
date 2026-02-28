@@ -1792,4 +1792,263 @@ defmodule Liteskill.LLM.StreamHandlerTest do
                )
     end
   end
+
+  defmodule BareStatusError do
+    defstruct [:status]
+  end
+
+  defmodule StatusBodyError do
+    defstruct [:status, :body]
+  end
+
+  describe "normalize_error/1" do
+    test "passes through plain map with status" do
+      error = %{status: 429, body: "rate limited"}
+      assert StreamHandler.normalize_error(error) == error
+    end
+
+    test "extracts status and response_body from struct" do
+      error =
+        ReqLLM.Error.API.Request.exception(
+          status: 500,
+          response_body: %{"error" => "server error"},
+          reason: "server error"
+        )
+
+      result = StreamHandler.normalize_error(error)
+      assert result == %{status: 500, body: %{"error" => "server error"}}
+    end
+
+    test "passes through struct without integer status" do
+      error = %RuntimeError{message: "boom"}
+      assert StreamHandler.normalize_error(error) == error
+    end
+
+    test "unwraps nested error tuple {outer, {inner, struct}}" do
+      inner_error =
+        ReqLLM.Error.API.Request.exception(
+          status: 503,
+          response_body: %{"error" => "unavailable"},
+          reason: "unavailable"
+        )
+
+      wrapped = {:http_streaming_failed, {:provider_build_failed, inner_error}}
+      result = StreamHandler.normalize_error(wrapped)
+      assert result == %{status: 503, body: %{"error" => "unavailable"}}
+    end
+
+    test "unwraps single-level error tuple {outer, struct}" do
+      inner_error =
+        ReqLLM.Error.API.Request.exception(
+          status: 502,
+          response_body: %{"error" => "bad gateway"},
+          reason: "bad gateway"
+        )
+
+      wrapped = {:streaming_failed, inner_error}
+      result = StreamHandler.normalize_error(wrapped)
+      assert result == %{status: 502, body: %{"error" => "bad gateway"}}
+    end
+
+    test "passes through unrecognized error format" do
+      assert StreamHandler.normalize_error(:timeout) == :timeout
+      assert StreamHandler.normalize_error("string error") == "string error"
+    end
+
+    test "extracts body from struct with :body key" do
+      error = %StatusBodyError{status: 422, body: "validation failed"}
+      result = StreamHandler.normalize_error(error)
+      assert result == %{status: 422, body: "validation failed"}
+    end
+
+    test "extracts reason when no response_body or body" do
+      error =
+        ReqLLM.Error.API.Request.exception(
+          status: 408,
+          reason: "timeout"
+        )
+
+      result = StreamHandler.normalize_error(error)
+      assert result == %{status: 408, body: "timeout"}
+    end
+
+    test "falls back to default message for struct with only status" do
+      error = %BareStatusError{status: 500}
+      result = StreamHandler.normalize_error(error)
+      assert result == %{status: 500, body: "LLM request failed"}
+    end
+  end
+
+  describe "extract_provider_id/1" do
+    test "extracts provider_id from llm_model" do
+      assert StreamHandler.extract_provider_id(llm_model: %{provider_id: "prov-123"}) ==
+               "prov-123"
+    end
+
+    test "extracts provider id from nested provider struct" do
+      assert StreamHandler.extract_provider_id(llm_model: %{provider: %{id: "prov-456"}}) ==
+               "prov-456"
+    end
+
+    test "returns nil when no llm_model" do
+      assert StreamHandler.extract_provider_id([]) == nil
+    end
+
+    test "returns nil when llm_model has no provider_id" do
+      assert StreamHandler.extract_provider_id(llm_model: %{name: "test"}) == nil
+    end
+  end
+
+  describe "gateway_checkin/2" do
+    test "calls ProviderGate.checkin when provider_id and ref present" do
+      # Start a real ProviderGate for this test
+      provider_id = "checkin-test-#{System.unique_integer([:positive])}"
+      {:ok, ref} = Liteskill.LlmGateway.ProviderGate.checkout(provider_id)
+
+      opts = [gateway_provider_id: provider_id, gateway_checkout_ref: ref]
+      assert StreamHandler.gateway_checkin(opts, :ok) == :ok
+    end
+
+    test "does nothing when no provider_id" do
+      assert StreamHandler.gateway_checkin([], :ok) == nil
+    end
+
+    test "does nothing when no ref" do
+      assert StreamHandler.gateway_checkin([gateway_provider_id: "prov-1"], :ok) == nil
+    end
+  end
+
+  describe "format_tool_error/1" do
+    test "returns binary as-is" do
+      assert StreamHandler.format_tool_error("something failed") == "something failed"
+    end
+
+    test "extracts message from exception" do
+      err = %RuntimeError{message: "boom"}
+      assert StreamHandler.format_tool_error(err) == "boom"
+    end
+
+    test "inspects other terms" do
+      assert StreamHandler.format_tool_error({:error, :timeout}) == "{:error, :timeout}"
+      assert StreamHandler.format_tool_error(42) == "42"
+    end
+  end
+
+  describe "check_gateway/1" do
+    test "skips gateway when skip_gateway: true" do
+      assert {:ok, opts} = StreamHandler.check_gateway(skip_gateway: true)
+      assert opts == [skip_gateway: true]
+    end
+
+    test "passes through when no user_id or model" do
+      assert {:ok, _opts} = StreamHandler.check_gateway([])
+    end
+
+    test "passes through when user_id and model_id provided (no rate limit hit)" do
+      assert {:ok, _opts} =
+               StreamHandler.check_gateway(
+                 user_id: Ecto.UUID.generate(),
+                 llm_model: %{model_id: "test-model-#{System.unique_integer([:positive])}"}
+               )
+    end
+  end
+
+  describe "check_token_bucket/1" do
+    test "returns :ok when no user_id" do
+      assert :ok = StreamHandler.check_token_bucket([])
+    end
+
+    test "returns :ok when under rate limit" do
+      assert :ok =
+               StreamHandler.check_token_bucket(
+                 user_id: Ecto.UUID.generate(),
+                 llm_model: %{model_id: "bucket-test-#{System.unique_integer([:positive])}"}
+               )
+    end
+
+    test "returns rate_limited error when over limit" do
+      user_id = Ecto.UUID.generate()
+      model_id = "rate-limit-test-#{System.unique_integer([:positive])}"
+
+      # Exhaust the bucket (default 60 req/min)
+      for _ <- 1..61 do
+        Liteskill.LlmGateway.TokenBucket.check_rate(user_id, model_id)
+      end
+
+      assert {:error, {"rate_limited", _}} =
+               StreamHandler.check_token_bucket(
+                 user_id: user_id,
+                 llm_model: %{model_id: model_id}
+               )
+    end
+  end
+
+  describe "check_provider_gate/1" do
+    test "returns empty opts when no provider_id" do
+      assert {:ok, []} = StreamHandler.check_provider_gate([])
+    end
+
+    test "returns checkout ref when provider_id found" do
+      provider_id = "gate-test-#{System.unique_integer([:positive])}"
+
+      assert {:ok, opts} =
+               StreamHandler.check_provider_gate(llm_model: %{provider_id: provider_id})
+
+      assert Keyword.has_key?(opts, :gateway_provider_id)
+      assert Keyword.has_key?(opts, :gateway_checkout_ref)
+
+      # Clean up: checkin
+      StreamHandler.gateway_checkin(opts, :ok)
+    end
+
+    test "returns circuit_open error when circuit is tripped" do
+      provider_id = "circuit-test-#{System.unique_integer([:positive])}"
+      gate = Liteskill.LlmGateway.ProviderGate
+
+      # Trip the circuit: checkout+checkin with errors to trigger open state
+      # Stop when circuit opens (checkout returns error)
+      Enum.reduce_while(1..20, :ok, fn _, _ ->
+        case gate.checkout(provider_id) do
+          {:ok, ref} ->
+            gate.checkin(provider_id, ref, {:error, :non_retryable})
+            {:cont, :ok}
+
+          {:error, :circuit_open, _} ->
+            {:halt, :tripped}
+        end
+      end)
+
+      assert {:error, {"circuit_open", _}} =
+               StreamHandler.check_provider_gate(llm_model: %{provider_id: provider_id})
+    end
+
+    test "returns concurrency_limit error when all slots taken" do
+      provider_id = "concurrency-test-#{System.unique_integer([:positive])}"
+      gate = Liteskill.LlmGateway.ProviderGate
+
+      # Exhaust concurrency (default 25)
+      refs =
+        for _ <- 1..25 do
+          {:ok, ref} = gate.checkout(provider_id)
+          ref
+        end
+
+      assert {:error, {"concurrency_limit", _}} =
+               StreamHandler.check_provider_gate(llm_model: %{provider_id: provider_id})
+
+      # Clean up
+      for ref <- refs, do: gate.checkin(provider_id, ref, :ok)
+    end
+
+    test "returns rate_limited error when retry_after is active" do
+      provider_id = "retry-after-test-#{System.unique_integer([:positive])}"
+      gate = Liteskill.LlmGateway.ProviderGate
+
+      {:ok, ref} = gate.checkout(provider_id)
+      gate.checkin(provider_id, ref, {:error, :retryable, 60_000})
+
+      assert {:error, {"rate_limited", _}} =
+               StreamHandler.check_provider_gate(llm_model: %{provider_id: provider_id})
+    end
+  end
 end

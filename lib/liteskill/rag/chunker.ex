@@ -95,7 +95,6 @@ defmodule Liteskill.Rag.Chunker do
       end
     end)
     |> then(fn
-      # coveralls-ignore-next-line
       {acc, ""} -> Enum.reverse(acc)
       {acc, remaining} -> Enum.reverse([remaining | acc])
     end)

@@ -88,6 +88,15 @@ defmodule Liteskill.Rag.CohereClientTest do
                )
     end
 
+    test "returns error on transport failure" do
+      Req.Test.stub(CohereClient, fn conn ->
+        Req.Test.transport_error(conn, :timeout)
+      end)
+
+      assert {:error, %Req.TransportError{reason: :timeout}} =
+               CohereClient.rerank("query", ["doc"], plug: {Req.Test, CohereClient})
+    end
+
     test "returns error on non-200 response" do
       Req.Test.stub(CohereClient, fn conn ->
         conn

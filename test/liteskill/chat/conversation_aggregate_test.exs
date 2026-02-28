@@ -693,6 +693,40 @@ defmodule Liteskill.Chat.ConversationAggregateTest do
     end
   end
 
+  describe "guard clauses for :created state" do
+    test "cannot add user message in :created state" do
+      state = ConversationAggregate.init()
+      assert state.status == :created
+
+      assert {:error, :not_active} =
+               ConversationAggregate.handle_command(state, {:add_user_message, %{content: "hi"}})
+    end
+
+    test "cannot update title in :created state" do
+      state = ConversationAggregate.init()
+
+      assert {:error, :not_active} =
+               ConversationAggregate.handle_command(state, {:update_title, %{title: "New"}})
+    end
+
+    test "cannot archive in :created state" do
+      state = ConversationAggregate.init()
+
+      assert {:error, :not_active} =
+               ConversationAggregate.handle_command(state, {:archive, %{}})
+    end
+  end
+
+  describe "unknown command catch-all" do
+    test "returns error for unknown command type" do
+      state =
+        apply_commands(ConversationAggregate.init(), [{:create_conversation, create_params()}])
+
+      assert {:error, {:unknown_command, :fake_command}} =
+               ConversationAggregate.handle_command(state, {:fake_command, %{}})
+    end
+  end
+
   defp create_params do
     %{conversation_id: "conv-1", user_id: "user-1", title: "Test", model_id: "claude"}
   end

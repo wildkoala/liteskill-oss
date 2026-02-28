@@ -222,11 +222,9 @@ defmodule Liteskill.Chat.Projector do
 
   defp project_event(%Event{event_type: "AssistantChunkReceived", data: data}) do
     case Repo.get(Message, data["message_id"]) do
-      # coveralls-ignore-start
       nil ->
         Logger.warning("Projector: message not found for chunk, skipping")
 
-      # coveralls-ignore-stop
       message ->
         %MessageChunk{}
         |> MessageChunk.changeset(%{
@@ -248,11 +246,9 @@ defmodule Liteskill.Chat.Projector do
          stream_id: stream_id
        }) do
     case Repo.get(Message, data["message_id"]) do
-      # coveralls-ignore-start
       nil ->
         Logger.warning("Projector: message not found for stream completion, skipping")
 
-      # coveralls-ignore-stop
       message ->
         input_tokens = data["input_tokens"]
         output_tokens = data["output_tokens"]

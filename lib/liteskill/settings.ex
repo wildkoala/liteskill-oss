@@ -16,13 +16,10 @@ defmodule Liteskill.Settings do
 
   def get do
     if cache_enabled?() do
-      # coveralls-ignore-start
       case :persistent_term.get(@cache_key, nil) do
         nil -> load_and_cache()
         settings -> settings
       end
-
-      # coveralls-ignore-stop
     else
       load_from_db()
     end
@@ -102,14 +99,11 @@ defmodule Liteskill.Settings do
     end
   end
 
-  # coveralls-ignore-start
   defp load_and_cache do
     settings = load_from_db()
     :persistent_term.put(@cache_key, settings)
     settings
   end
-
-  # coveralls-ignore-stop
 
   defp cache_enabled?, do: Application.get_env(:liteskill, :settings_cache, true)
 end

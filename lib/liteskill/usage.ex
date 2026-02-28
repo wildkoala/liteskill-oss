@@ -130,11 +130,9 @@ defmodule Liteskill.Usage do
         {:ok, _} ->
           :ok
 
-        # coveralls-ignore-start
         {:error, changeset} ->
           Logger.warning("Failed to record usage: #{inspect(changeset.errors)}")
           :ok
-          # coveralls-ignore-stop
       end
     else
       :ok

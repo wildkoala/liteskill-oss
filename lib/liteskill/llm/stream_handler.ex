@@ -74,8 +74,8 @@ defmodule Liteskill.LLM.StreamHandler do
     end
   end
 
-  # coveralls-ignore-start — gateway integration tested at ProviderGate/TokenBucket level
-  defp check_gateway(opts) do
+  @doc false
+  def check_gateway(opts) do
     if Keyword.get(opts, :skip_gateway, false) do
       {:ok, opts}
     else
@@ -86,7 +86,8 @@ defmodule Liteskill.LLM.StreamHandler do
     end
   end
 
-  defp check_token_bucket(opts) do
+  @doc false
+  def check_token_bucket(opts) do
     user_id = Keyword.get(opts, :user_id)
     llm_model = Keyword.get(opts, :llm_model)
     model_id = if llm_model, do: llm_model.model_id, else: Keyword.get(opts, :model_id)
@@ -104,7 +105,8 @@ defmodule Liteskill.LLM.StreamHandler do
     end
   end
 
-  defp check_provider_gate(opts) do
+  @doc false
+  def check_provider_gate(opts) do
     provider_id = extract_provider_id(opts)
 
     if provider_id do
@@ -112,6 +114,7 @@ defmodule Liteskill.LLM.StreamHandler do
         {:ok, ref} ->
           {:ok, [gateway_provider_id: provider_id, gateway_checkout_ref: ref]}
 
+        # coveralls-ignore-next-line — only when DynamicSupervisor/Registry not running
         {:error, :gateway_not_available} ->
           {:ok, []}
 
@@ -128,8 +131,6 @@ defmodule Liteskill.LLM.StreamHandler do
       {:ok, []}
     end
   end
-
-  # coveralls-ignore-stop
 
   defp check_context_size(messages, %{context_window: cw})
        when is_integer(cw) and cw > 0 do
@@ -158,8 +159,8 @@ defmodule Liteskill.LLM.StreamHandler do
   defp content_byte_size(content) when is_map(content), do: byte_size(Jason.encode!(content))
   defp content_byte_size(_), do: 0
 
-  # coveralls-ignore-start
-  defp extract_provider_id(opts) do
+  @doc false
+  def extract_provider_id(opts) do
     case Keyword.get(opts, :llm_model) do
       %{provider_id: pid} when is_binary(pid) -> pid
       %{provider: %{id: pid}} when is_binary(pid) -> pid
@@ -167,7 +168,8 @@ defmodule Liteskill.LLM.StreamHandler do
     end
   end
 
-  defp gateway_checkin(opts, result) do
+  @doc false
+  def gateway_checkin(opts, result) do
     provider_id = Keyword.get(opts, :gateway_provider_id)
     ref = Keyword.get(opts, :gateway_checkout_ref)
 
@@ -175,8 +177,6 @@ defmodule Liteskill.LLM.StreamHandler do
       ProviderGate.checkin(provider_id, ref, result)
     end
   end
-
-  # coveralls-ignore-stop
 
   defp do_start_stream(stream_id, messages, opts) do
     llm_model = Keyword.get(opts, :llm_model)
@@ -580,11 +580,10 @@ defmodule Liteskill.LLM.StreamHandler do
 
   defp truncate_error(text, _max), do: text
 
-  # coveralls-ignore-start
-  # normalize_error is only called from default_stream
-  defp normalize_error(%{status: _} = error) when not is_struct(error), do: error
+  @doc false
+  def normalize_error(%{status: _} = error) when not is_struct(error), do: error
 
-  defp normalize_error(error) when is_struct(error) do
+  def normalize_error(error) when is_struct(error) do
     if Map.has_key?(error, :status) and is_integer(Map.get(error, :status)) do
       body =
         cond do
@@ -609,14 +608,13 @@ defmodule Liteskill.LLM.StreamHandler do
   end
 
   # Unwrap nested error tuples from ReqLLM (e.g. {:http_streaming_failed, {:provider_build_failed, struct}})
-  defp normalize_error({_outer, {_inner, %{} = error}}) when is_struct(error),
+  def normalize_error({_outer, {_inner, %{} = error}}) when is_struct(error),
     do: normalize_error(error)
 
-  defp normalize_error({_outer, %{} = error}) when is_struct(error),
+  def normalize_error({_outer, %{} = error}) when is_struct(error),
     do: normalize_error(error)
 
-  defp normalize_error(error), do: error
-  # coveralls-ignore-stop
+  def normalize_error(error), do: error
 
   # -- Tool call validation --
 
@@ -1032,9 +1030,8 @@ defmodule Liteskill.LLM.StreamHandler do
     end
   end
 
-  defp format_tool_error(err) when is_binary(err), do: err
-  # coveralls-ignore-start
-  defp format_tool_error(err) when is_exception(err), do: Exception.message(err)
-  defp format_tool_error(err), do: inspect(err)
-  # coveralls-ignore-stop
+  @doc false
+  def format_tool_error(err) when is_binary(err), do: err
+  def format_tool_error(err) when is_exception(err), do: Exception.message(err)
+  def format_tool_error(err), do: inspect(err)
 end

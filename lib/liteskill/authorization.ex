@@ -190,11 +190,8 @@ defmodule Liteskill.Authorization do
         nil ->
           {:error, :not_found}
 
-        # coveralls-ignore-start
         %EntityAcl{role: "owner"} ->
           {:error, :cannot_revoke_owner}
-
-        # coveralls-ignore-stop
 
         %EntityAcl{} = acl ->
           if can_revoke?(revoker_role, acl.role) do
@@ -441,7 +438,6 @@ defmodule Liteskill.Authorization do
   defp validate_grant_permission(_, _, _), do: {:error, :forbidden}
 
   defp can_revoke?(revoker_role, _target_role) when revoker_role in ["owner", "manager"], do: true
-  # coveralls-ignore-next-line
   defp can_revoke?(_, _), do: false
 
   @doc """

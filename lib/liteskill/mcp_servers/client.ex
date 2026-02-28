@@ -79,7 +79,6 @@ defmodule Liteskill.McpServers.Client do
       {:ok, %{status: status, body: resp_body}} ->
         {:error, %{status: status, body: resp_body}}
 
-      # coveralls-ignore-next-line
       {:error, reason} ->
         {:error, reason}
     end
@@ -109,13 +108,12 @@ defmodule Liteskill.McpServers.Client do
       {:ok, %{status: status, body: resp_body}} ->
         {:error, %{status: status, body: resp_body}}
 
-      # coveralls-ignore-start — Req.Test cannot simulate Mint.TransportError
+      # coveralls-ignore-start — Req.Test produces Req.TransportError, not Mint.TransportError
       {:error, %Mint.TransportError{} = _reason} when attempt < @mcp_max_retries ->
         backoff_and_retry(server, body, session_id, opts, attempt)
 
       # coveralls-ignore-stop
 
-      # coveralls-ignore-next-line
       {:error, reason} ->
         {:error, reason}
     end
@@ -163,7 +161,7 @@ defmodule Liteskill.McpServers.Client do
     end
   end
 
-  # coveralls-ignore-next-line
+  # coveralls-ignore-next-line — Req always returns binary or decoded JSON map
   defp parse_body(body), do: body
 
   defp session_header(nil), do: []

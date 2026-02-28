@@ -54,12 +54,9 @@ defmodule Liteskill.Chat.ConversationAggregate do
     {:error, :already_created}
   end
 
-  # coveralls-ignore-start - :created state unreachable through normal Chat context flow
   def handle_command(%{status: :created}, {:add_user_message, _}) do
     {:error, :not_active}
   end
-
-  # coveralls-ignore-stop
 
   def handle_command(%{status: :archived}, {:add_user_message, _}) do
     {:error, :conversation_archived}
@@ -211,7 +208,6 @@ defmodule Liteskill.Chat.ConversationAggregate do
     {:error, :conversation_archived}
   end
 
-  # coveralls-ignore-next-line
   def handle_command(%{status: :created}, {:update_title, _}), do: {:error, :not_active}
 
   def handle_command(%{status: _status}, {:update_title, params}) do
@@ -230,7 +226,6 @@ defmodule Liteskill.Chat.ConversationAggregate do
     {:error, :already_archived}
   end
 
-  # coveralls-ignore-next-line
   def handle_command(%{status: :created}, {:archive, _}), do: {:error, :not_active}
 
   def handle_command(%{status: _status}, {:archive, _params}) do
@@ -271,12 +266,9 @@ defmodule Liteskill.Chat.ConversationAggregate do
     end
   end
 
-  # coveralls-ignore-start
   def handle_command(_state, {command_type, _params}) do
     {:error, {:unknown_command, command_type}}
   end
-
-  # coveralls-ignore-stop
 
   defp iso_now, do: DateTime.utc_now() |> DateTime.to_iso8601()
 

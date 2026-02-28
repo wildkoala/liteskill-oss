@@ -387,11 +387,27 @@ defmodule Liteskill.SchedulesTest do
       assert result == ~U[2026-02-14 10:30:00Z]
     end
 
+    test "handles invalid step value in cron (*/abc treated as wildcard)" do
+      from = ~U[2026-02-14 10:00:00Z]
+      # "*/abc" fails Integer.parse, falls back to :any (wildcard)
+      result = Schedules.compute_next_run("*/abc * * * *", "UTC", from)
+      # Treated as "* * * * *" — next match is 10:01
+      assert result == ~U[2026-02-14 10:01:00Z]
+    end
+
     test "computes next run with non-UTC timezone" do
       from = ~U[2026-02-14 15:00:00Z]
       # 15:00 UTC = 10:00 EST. Next 9:00 EST = next day 14:00 UTC
       result = Schedules.compute_next_run("0 9 * * *", "America/New_York", from)
       assert result == ~U[2026-02-15 14:00:00Z]
+    end
+
+    test "falls back gracefully with invalid timezone" do
+      from = ~U[2026-02-14 10:00:00Z]
+      # Invalid timezone triggers fallback in both shift_to_timezone and shift_from_timezone
+      result = Schedules.compute_next_run("*/5 * * * *", "Invalid/Zone", from)
+      # Should still compute a result, falling back to UTC
+      assert result != nil
     end
   end
 end

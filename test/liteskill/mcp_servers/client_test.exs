@@ -684,4 +684,35 @@ defmodule Liteskill.McpServers.ClientTest do
       assert Agent.get(counter, & &1) == 1
     end
   end
+
+  describe "transport errors" do
+    test "initialize returns error on transport failure" do
+      server = build_server()
+
+      Req.Test.stub(Liteskill.McpServers.Client, fn conn ->
+        Req.Test.transport_error(conn, :timeout)
+      end)
+
+      assert {:error, %Req.TransportError{reason: :timeout}} =
+               Client.list_tools(server, plug: {Req.Test, Liteskill.McpServers.Client})
+    end
+
+    test "send_request returns error on transport failure after init" do
+      server = build_server()
+      {:ok, counter} = Agent.start_link(fn -> 0 end)
+
+      Req.Test.stub(Liteskill.McpServers.Client, fn conn ->
+        call = Agent.get_and_update(counter, fn n -> {n, n + 1} end)
+
+        case call do
+          0 -> init_response(conn)
+          1 -> Plug.Conn.send_resp(conn, 200, "")
+          _ -> Req.Test.transport_error(conn, :closed)
+        end
+      end)
+
+      assert {:error, %Req.TransportError{reason: :closed}} =
+               Client.list_tools(server, plug: {Req.Test, Liteskill.McpServers.Client})
+    end
+  end
 end

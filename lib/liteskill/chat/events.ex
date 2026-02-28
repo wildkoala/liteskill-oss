@@ -61,8 +61,6 @@ defmodule Liteskill.Chat.Events do
   defp stringify_keys(map) when is_map(map) do
     Map.new(map, fn
       {key, value} when is_atom(key) -> {Atom.to_string(key), value}
-      # coveralls-ignore-next-line
-      {key, value} -> {key, value}
     end)
   end
 

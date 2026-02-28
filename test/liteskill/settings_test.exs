@@ -163,6 +163,26 @@ defmodule Liteskill.SettingsTest do
     end
   end
 
+  describe "persistent_term cache" do
+    test "get/0 uses persistent_term cache when enabled" do
+      original = Application.get_env(:liteskill, :settings_cache)
+      Application.put_env(:liteskill, :settings_cache, true)
+
+      on_exit(fn ->
+        Application.put_env(:liteskill, :settings_cache, original)
+        Settings.bust_cache()
+      end)
+
+      # First call loads from DB and caches
+      s1 = Settings.get()
+      assert %ServerSettings{} = s1
+
+      # Second call should hit the cache
+      s2 = Settings.get()
+      assert s2.id == s1.id
+    end
+  end
+
   describe "bust_cache/0" do
     test "erases persistent_term entry" do
       # In test mode, cache is disabled, but bust_cache should not crash

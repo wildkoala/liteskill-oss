@@ -219,10 +219,8 @@ defmodule Liteskill.Rbac do
       %{email: email} ->
         email == @root_admin_email
 
-      # coveralls-ignore-start
       nil ->
         false
-        # coveralls-ignore-stop
     end
   end
 

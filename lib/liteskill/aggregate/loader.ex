@@ -140,7 +140,6 @@ defmodule Liteskill.Aggregate.Loader do
 
   defp restore_atom_fields(map), do: restore_nested_atom_fields(map)
 
-  # coveralls-ignore-start - only triggered when snapshot taken during streaming with active tool calls
   defp restore_nested_atom_fields(%{current_stream: %{tool_calls: tool_calls} = stream} = map)
        when is_list(tool_calls) do
     restored_tcs =
@@ -151,8 +150,6 @@ defmodule Liteskill.Aggregate.Loader do
 
     %{map | current_stream: %{stream | tool_calls: restored_tcs}}
   end
-
-  # coveralls-ignore-stop
 
   defp restore_nested_atom_fields(map), do: map
 

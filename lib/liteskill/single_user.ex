@@ -48,10 +48,8 @@ defmodule Liteskill.SingleUser do
           {:ok, admin}
         end
 
-      # coveralls-ignore-start
       nil ->
         :noop
-        # coveralls-ignore-stop
     end
   end
 

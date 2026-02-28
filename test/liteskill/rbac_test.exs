@@ -305,6 +305,15 @@ defmodule Liteskill.RbacTest do
       assert roles != []
     end
 
+    test "allows removing Instance Admin from non-existent user" do
+      Rbac.ensure_system_roles()
+      admin_role = Rbac.get_role_by_name!("Instance Admin")
+
+      # Non-existent user_id — root_admin? returns false, falls through to :not_found
+      assert {:error, :not_found} =
+               Rbac.remove_role_from_user(Ecto.UUID.generate(), admin_role.id)
+    end
+
     test "protects root admin from losing Instance Admin" do
       # Create or find the root admin
       admin = Liteskill.Accounts.ensure_admin_user()

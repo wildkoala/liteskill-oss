@@ -142,6 +142,22 @@ defmodule Liteskill.UsageTest do
       assert record.model_id == "claude-from-struct"
     end
 
+    test "logs warning and returns :ok on record_usage error" do
+      import ExUnit.CaptureLog
+
+      log =
+        capture_log(fn ->
+          assert :ok =
+                   Usage.record_from_response(%{input_tokens: 10, total_tokens: 10},
+                     user_id: Ecto.UUID.generate(),
+                     model_id: "test",
+                     call_type: "invalid_type"
+                   )
+        end)
+
+      assert log =~ "Failed to record usage"
+    end
+
     test "no-ops when user_id is nil" do
       assert :ok =
                Usage.record_from_response(%{input_tokens: 10},

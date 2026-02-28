@@ -84,5 +84,16 @@ defmodule Liteskill.OpenRouterTest do
                  plug: {Req.Test, Liteskill.OpenRouter}
                )
     end
+
+    test "returns {:error, msg} on transport error" do
+      Req.Test.stub(Liteskill.OpenRouter, fn conn ->
+        Req.Test.transport_error(conn, :timeout)
+      end)
+
+      assert {:error, "OpenRouter request failed: " <> _} =
+               OpenRouter.exchange_code("code", "verifier",
+                 plug: {Req.Test, Liteskill.OpenRouter}
+               )
+    end
   end
 end

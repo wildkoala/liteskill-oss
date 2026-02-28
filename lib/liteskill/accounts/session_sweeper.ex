@@ -27,9 +27,7 @@ defmodule Liteskill.Accounts.SessionSweeper do
     {:noreply, state}
   end
 
-  # coveralls-ignore-start
   def handle_info(_msg, state), do: {:noreply, state}
-  # coveralls-ignore-stop
 
   defp schedule_sweep(interval) do
     Process.send_after(self(), :sweep, interval)
