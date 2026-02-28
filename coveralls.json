@@ -13,6 +13,8 @@
     "lib/liteskill_web/controllers/page_html.ex",
     "lib/liteskill_web/controllers/session_controller.ex",
     "lib/liteskill_web/controllers/auth_controller.ex",
+    "lib/liteskill_web/controllers/saml_auth_controller.ex",
+    "lib/liteskill_web/saml_pipeline.ex",
     "lib/liteskill_web/router.ex",
     "lib/liteskill_web/live/auth_live.ex",
     "lib/liteskill_web/live/chat_live.ex",
