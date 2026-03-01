@@ -263,6 +263,37 @@ defmodule Liteskill.Chat.StreamRegistryTest do
     end
   end
 
+  describe "recovery skipped when new stream active" do
+    test "skips recovery if a new stream registered for the same conversation", %{
+      registry: name,
+      registry_pid: registry_pid
+    } do
+      conv_id = Ecto.UUID.generate()
+
+      # Register a new active stream for this conversation
+      active_task =
+        Task.async(fn ->
+          receive do
+          end
+        end)
+
+      :ok = StreamRegistry.register(conv_id, active_task.pid, name: name)
+      assert StreamRegistry.streaming?(conv_id)
+
+      # Send a :recover message (simulating a delayed recovery from a crashed old stream)
+      send(registry_pid, {:recover, conv_id})
+      # Synchronize — ensure the GenServer processed the message
+      _ = :sys.get_state(registry_pid)
+
+      # The active stream should still be running (recovery was skipped)
+      assert StreamRegistry.streaming?(conv_id)
+      assert {:ok, pid} = StreamRegistry.lookup(conv_id)
+      assert pid == active_task.pid
+
+      Task.shutdown(active_task)
+    end
+  end
+
   describe "auto-recovery failure" do
     test "logs warning when recovery fails for non-existent conversation", %{registry: name} do
       conv_id = Ecto.UUID.generate()

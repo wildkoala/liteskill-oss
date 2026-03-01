@@ -264,5 +264,70 @@ defmodule Liteskill.Aggregate.LoaderTest do
     end
   end
 
+  describe "snapshot pruning" do
+    test "old snapshots are deleted after saving a new one" do
+      stream = stream_id()
+
+      # Manually create snapshots at version 100 and 200
+      Store.save_snapshot(stream, 100, "Counter", %{"count" => 100})
+      Store.save_snapshot(stream, 200, "Counter", %{"count" => 200})
+
+      # Verify both exist
+      {:ok, snapshot} = Store.get_latest_snapshot(stream)
+      assert snapshot.stream_version == 200
+
+      # Append 300 events then trigger a third snapshot via execute
+      events = for _i <- 1..299, do: %{event_type: "CounterIncremented", data: %{"amount" => 1}}
+      {:ok, _} = Store.append_events(stream, 0, events)
+      {:ok, state, _} = Loader.execute(Counter, stream, {:increment, %{amount: 1}})
+      assert state.count == 300
+
+      # A new snapshot at version 300 should exist, and older ones pruned
+      {:ok, snapshot} = Store.get_latest_snapshot(stream)
+      assert snapshot.stream_version == 300
+
+      # Old snapshots should be gone (delete_snapshots_before removes versions < 300)
+      deleted = Store.delete_snapshots_before(stream, 300)
+      assert deleted == 0
+    end
+  end
+
+  describe "recursive stringify_keys for snapshots" do
+    defmodule NestedAggregate do
+      @behaviour Liteskill.Aggregate
+      defstruct status: :created, config: %{}, items: []
+
+      @impl true
+      def init, do: %__MODULE__{}
+
+      @impl true
+      def apply_event(state, %{event_type: "Configured", data: %{"config" => config}}) do
+        %{state | status: :active, config: config}
+      end
+
+      @impl true
+      def handle_command(_state, {:configure, %{config: config}}) do
+        {:ok, [%{event_type: "Configured", data: %{"config" => config}}]}
+      end
+    end
+
+    test "nested map keys in snapshots survive round-trip" do
+      stream = stream_id()
+
+      # Save a snapshot with nested maps (simulating what the loader produces)
+      Store.save_snapshot(stream, 5, "NestedAggregate", %{
+        "status" => "active",
+        "config" => %{"nested" => %{"deep_key" => "deep_value"}},
+        "items" => [%{"name" => "item1"}]
+      })
+
+      {state, version} = Loader.load(NestedAggregate, stream)
+      assert version == 5
+      assert state.status == :active
+      assert state.config == %{nested: %{deep_key: "deep_value"}}
+      assert state.items == [%{name: "item1"}]
+    end
+  end
+
   defp stream_id, do: "test-counter-#{System.unique_integer([:positive])}"
 end

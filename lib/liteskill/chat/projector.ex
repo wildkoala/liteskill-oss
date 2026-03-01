@@ -82,8 +82,9 @@ defmodule Liteskill.Chat.Projector do
 
   # --- Projection Logic ---
 
-  @max_projection_retries 2
-  @projection_retry_backoff_ms 100
+  @max_projection_retries 3
+  @projection_base_backoff_ms 100
+  @projection_max_backoff_ms 5_000
 
   defp do_project(stream_id, events) do
     Enum.each(events, fn event ->
@@ -110,7 +111,25 @@ defmodule Liteskill.Chat.Projector do
   defp handle_projection_error(stream_id, event, attempt, error)
        when attempt < @max_projection_retries do
     if retryable_projection_error?(error) do
-      backoff_ms = @projection_retry_backoff_ms * (attempt + 1)
+      backoff_ms = retry_backoff_ms(attempt)
+
+      Logger.warning(
+        "Projector retrying: stream=#{stream_id} event=#{event.event_type} " <>
+          "version=#{event.stream_version} attempt=#{attempt + 1}/#{@max_projection_retries} " <>
+          "backoff=#{backoff_ms}ms"
+      )
+
+      :telemetry.execute(
+        [:liteskill, :projector, :event_retrying],
+        %{count: 1, backoff_ms: backoff_ms},
+        %{
+          stream_id: stream_id,
+          event_type: event.event_type,
+          stream_version: event.stream_version,
+          attempt: attempt + 1
+        }
+      )
+
       Process.send_after(self(), {:retry_projection, stream_id, event, attempt + 1}, backoff_ms)
     else
       log_projection_failure(stream_id, event, attempt, error)
@@ -123,7 +142,9 @@ defmodule Liteskill.Chat.Projector do
 
   defp log_projection_failure(stream_id, event, attempt, error) do
     Logger.error(
-      "Projector failed: stream=#{stream_id} event=#{event.event_type} version=#{event.stream_version} error=#{Exception.message(error)} attempts=#{attempt + 1}"
+      "Projector failed: stream=#{stream_id} event=#{event.event_type} " <>
+        "version=#{event.stream_version} error=#{Exception.message(error)} " <>
+        "attempts=#{attempt + 1}"
     )
 
     :telemetry.execute(
@@ -136,6 +157,13 @@ defmodule Liteskill.Chat.Projector do
         error: Exception.message(error)
       }
     )
+  end
+
+  # Exponential backoff with jitter to avoid thundering herd on DB recovery.
+  defp retry_backoff_ms(attempt) do
+    base = min(@projection_base_backoff_ms * Integer.pow(2, attempt), @projection_max_backoff_ms)
+    jitter = :rand.uniform(max(1, div(base, 2)))
+    base + jitter
   end
 
   defp retryable_projection_error?(%DBConnection.ConnectionError{}), do: true

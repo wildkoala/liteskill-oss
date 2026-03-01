@@ -576,23 +576,22 @@ defmodule Liteskill.Chat do
               "AssistantStreamCompleted",
               "AssistantStreamFailed"
             ] do
-    new_msg_id = Map.fetch!(id_map, data["message_id"])
+    {new_msg_id, id_map} = resolve_mapped_id(id_map, data["message_id"])
     {Map.put(data, "message_id", new_msg_id), id_map}
   end
 
   defp remap_event_data(%{event_type: type, data: data}, _new_conv_id, id_map)
        when type in ["ToolCallStarted", "ToolCallCompleted"] do
-    new_msg_id = Map.fetch!(id_map, data["message_id"])
-    old_tool_use_id = data["tool_use_id"]
+    {new_msg_id, id_map} = resolve_mapped_id(id_map, data["message_id"])
 
     {new_tool_use_id, id_map} =
-      case Map.fetch(id_map, old_tool_use_id) do
+      case Map.fetch(id_map, data["tool_use_id"]) do
         {:ok, existing} ->
           {existing, id_map}
 
         :error ->
           new_id = Ecto.UUID.generate()
-          {new_id, Map.put(id_map, old_tool_use_id, new_id)}
+          {new_id, Map.put(id_map, data["tool_use_id"], new_id)}
       end
 
     data =
@@ -604,11 +603,32 @@ defmodule Liteskill.Chat do
   end
 
   defp remap_event_data(%{event_type: "ConversationTruncated", data: data}, _new_conv_id, id_map) do
-    new_msg_id = Map.fetch!(id_map, data["message_id"])
+    {new_msg_id, id_map} = resolve_mapped_id(id_map, data["message_id"])
     {Map.put(data, "message_id", new_msg_id), id_map}
   end
 
   defp remap_event_data(%{data: data}, _new_conv_id, id_map) do
     {data, id_map}
+  end
+
+  # Resolves a mapped ID from the fork id_map. If the original_id isn't found
+  # (shouldn't happen, but guards against malformed event data), generates a
+  # fresh UUID and logs a warning instead of crashing the fork operation.
+  defp resolve_mapped_id(id_map, original_id) do
+    case Map.fetch(id_map, original_id) do
+      {:ok, mapped_id} ->
+        {mapped_id, id_map}
+
+      # coveralls-ignore-start - defensive guard against malformed event data
+      :error ->
+        new_id = Ecto.UUID.generate()
+
+        Logger.warning(
+          "Fork: unmapped ID #{inspect(original_id)}, generating replacement #{new_id}"
+        )
+
+        {new_id, Map.put(id_map, original_id, new_id)}
+        # coveralls-ignore-stop
+    end
   end
 end

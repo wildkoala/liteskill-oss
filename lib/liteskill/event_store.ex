@@ -27,4 +27,6 @@ defmodule Liteskill.EventStore do
   @callback save_snapshot(stream_id(), non_neg_integer(), String.t(), map()) :: {:ok, any()}
 
   @callback get_latest_snapshot(stream_id()) :: {:ok, any()} | {:error, :not_found}
+
+  @callback delete_snapshots_before(stream_id(), non_neg_integer()) :: non_neg_integer()
 end

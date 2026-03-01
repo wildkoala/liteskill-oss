@@ -60,9 +60,14 @@ defmodule Liteskill.Chat.Events do
 
   defp stringify_keys(map) when is_map(map) do
     Map.new(map, fn
-      {key, value} when is_atom(key) -> {Atom.to_string(key), value}
+      {key, value} when is_atom(key) -> {Atom.to_string(key), stringify_value(value)}
+      {key, value} -> {key, stringify_value(value)}
     end)
   end
+
+  defp stringify_value(map) when is_map(map) and not is_struct(map), do: stringify_keys(map)
+  defp stringify_value(list) when is_list(list), do: Enum.map(list, &stringify_value/1)
+  defp stringify_value(value), do: value
 
   defp atomize_keys(map) when is_map(map) do
     Map.new(map, fn
@@ -77,6 +82,10 @@ defmodule Liteskill.Chat.Events do
         {atom_key, value}
 
       {key, value} when is_atom(key) ->
+        {key, value}
+
+      # coveralls-ignore-next-line
+      {key, value} ->
         {key, value}
     end)
   end

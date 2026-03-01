@@ -136,26 +136,33 @@ defmodule Liteskill.Chat.StreamRegistry do
   end
 
   def handle_info({:recover, conv_id}, state) do
-    Task.Supervisor.start_child(Liteskill.TaskSupervisor, fn ->
-      try do
-        Liteskill.Chat.recover_stream_by_id(conv_id)
-      rescue
-        # coveralls-ignore-start — rescue runs inside async Task.Supervisor child
-        e in [
-          Ecto.NoResultsError,
-          Postgrex.Error,
-          DBConnection.ConnectionError,
-          Ecto.ConstraintError,
-          Ecto.StaleEntryError,
-          Ecto.InvalidChangesetError
-        ] ->
-          Logger.warning(
-            "StreamRegistry auto-recovery failed for #{conv_id}: #{Exception.message(e)}"
-          )
+    # Skip recovery if a new stream task has already registered for this
+    # conversation. Without this guard, the delayed recovery would fail_stream
+    # the *new* stream's message, not the old one that crashed.
+    if streaming?(conv_id) do
+      Logger.debug("StreamRegistry: skipping recovery for #{conv_id} — new stream active")
+    else
+      Task.Supervisor.start_child(Liteskill.TaskSupervisor, fn ->
+        try do
+          Liteskill.Chat.recover_stream_by_id(conv_id)
+        rescue
+          # coveralls-ignore-start — rescue runs inside async Task.Supervisor child
+          e in [
+            Ecto.NoResultsError,
+            Postgrex.Error,
+            DBConnection.ConnectionError,
+            Ecto.ConstraintError,
+            Ecto.StaleEntryError,
+            Ecto.InvalidChangesetError
+          ] ->
+            Logger.warning(
+              "StreamRegistry auto-recovery failed for #{conv_id}: #{Exception.message(e)}"
+            )
 
-          # coveralls-ignore-stop
-      end
-    end)
+            # coveralls-ignore-stop
+        end
+      end)
+    end
 
     {:noreply, state}
   end

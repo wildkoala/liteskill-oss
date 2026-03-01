@@ -116,6 +116,16 @@ defmodule Liteskill.EventStore.Postgres do
     end
   end
 
+  @impl true
+  def delete_snapshots_before(stream_id, version) do
+    {count, _} =
+      Snapshot
+      |> where([s], s.stream_id == ^stream_id and s.stream_version < ^version)
+      |> Repo.delete_all()
+
+    count
+  end
+
   defp broadcast_events(stream_id, events) do
     Phoenix.PubSub.broadcast(@pubsub, topic(stream_id), {:events, stream_id, events})
   end

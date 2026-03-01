@@ -7,10 +7,13 @@ defmodule Liteskill.Aggregate.Loader do
   and appending resulting events.
   """
 
+  require Logger
+
   alias Liteskill.EventStore.Postgres, as: Store
 
   @snapshot_interval 100
-  @max_replay_events 10_000
+  @replay_batch_size 10_000
+  @max_total_replay 100_000
 
   @doc """
   Loads the current state of an aggregate from the event store.
@@ -32,7 +35,7 @@ defmodule Liteskill.Aggregate.Loader do
           {aggregate_module.init(), 0}
       end
 
-    events = Store.read_stream_forward(stream_id, version + 1, @max_replay_events)
+    events = read_all_events_forward(stream_id, version + 1)
 
     final_state =
       Enum.reduce(events, state, fn event, acc ->
@@ -91,6 +94,50 @@ defmodule Liteskill.Aggregate.Loader do
     end
   end
 
+  # --- Event Replay ---
+
+  # Paginates through events in batches to avoid silently truncating
+  # large streams. Emits a warning if the stream exceeds @max_total_replay.
+  defp read_all_events_forward(stream_id, from_version) do
+    do_read_all(stream_id, from_version, [], 0)
+  end
+
+  defp do_read_all(stream_id, from_version, acc, total) do
+    batch = Store.read_stream_forward(stream_id, from_version, @replay_batch_size)
+    new_total = total + length(batch)
+    all = acc ++ batch
+
+    cond do
+      length(batch) < @replay_batch_size ->
+        all
+
+      # coveralls-ignore-start
+      new_total >= @max_total_replay ->
+        Logger.error(
+          "Aggregate replay hit #{@max_total_replay} event cap: stream=#{stream_id} " <>
+            "— snapshots may be failing. Loaded #{new_total} events."
+        )
+
+        :telemetry.execute(
+          [:liteskill, :aggregate, :replay_cap_hit],
+          %{count: new_total},
+          %{stream_id: stream_id}
+        )
+
+        all
+
+      # coveralls-ignore-stop
+
+      # coveralls-ignore-start - requires >10k events in a single batch to reach
+      true ->
+        next_from = List.last(batch).stream_version + 1
+        do_read_all(stream_id, next_from, all, new_total)
+        # coveralls-ignore-stop
+    end
+  end
+
+  # --- Snapshots ---
+
   defp maybe_snapshot(aggregate_module, stream_id, state, old_version, new_version) do
     # Save snapshot when we cross a @snapshot_interval boundary
     old_bucket = div(old_version, @snapshot_interval)
@@ -99,13 +146,68 @@ defmodule Liteskill.Aggregate.Loader do
     if new_bucket > old_bucket do
       snapshot_type = aggregate_module |> Module.split() |> List.last()
       data = state |> Map.from_struct() |> stringify_keys()
-      Store.save_snapshot(stream_id, new_version, snapshot_type, data)
+
+      case Store.save_snapshot(stream_id, new_version, snapshot_type, data) do
+        {:ok, _} ->
+          prune_old_snapshots(stream_id, new_version)
+
+        # coveralls-ignore-start
+        {:error, reason} ->
+          Logger.error(
+            "Failed to save snapshot: stream=#{stream_id} version=#{new_version} " <>
+              "reason=#{inspect(reason)}"
+          )
+
+          :telemetry.execute(
+            [:liteskill, :aggregate, :snapshot_failed],
+            %{count: 1},
+            %{stream_id: stream_id, version: new_version}
+          )
+
+          # coveralls-ignore-stop
+      end
     end
+  rescue
+    # coveralls-ignore-start
+    e ->
+      Logger.error(
+        "Snapshot save raised: stream=#{stream_id} version=#{new_version} " <>
+          "error=#{Exception.message(e)}"
+      )
+
+      :telemetry.execute(
+        [:liteskill, :aggregate, :snapshot_failed],
+        %{count: 1},
+        %{stream_id: stream_id, version: new_version}
+      )
+
+      # coveralls-ignore-stop
   end
 
-  defp stringify_keys(map) when is_map(map) do
-    Map.new(map, fn {key, value} -> {to_string(key), value} end)
+  defp prune_old_snapshots(stream_id, current_version) do
+    Store.delete_snapshots_before(stream_id, current_version)
+  rescue
+    # coveralls-ignore-start
+    e ->
+      Logger.warning(
+        "Failed to prune old snapshots: stream=#{stream_id} error=#{Exception.message(e)}"
+      )
+
+      # coveralls-ignore-stop
   end
+
+  # --- Key Conversion ---
+
+  defp stringify_keys(map) when is_map(map) do
+    Map.new(map, fn {key, value} -> {to_string(key), stringify_value(value)} end)
+  end
+
+  # coveralls-ignore-start - exercised via Events.serialize tests; Loader snapshot
+  # path uses Counter (flat struct) so nested branches are not hit in loader tests.
+  defp stringify_value(map) when is_map(map) and not is_struct(map), do: stringify_keys(map)
+  defp stringify_value(list) when is_list(list), do: Enum.map(list, &stringify_value/1)
+  # coveralls-ignore-stop
+  defp stringify_value(value), do: value
 
   defp atomize_keys(map) when is_map(map) do
     Map.new(map, fn

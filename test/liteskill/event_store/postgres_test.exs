@@ -122,6 +122,39 @@ defmodule Liteskill.EventStore.PostgresTest do
     end
   end
 
+  describe "delete_snapshots_before/2" do
+    test "deletes snapshots before a given version" do
+      stream = stream_id()
+      {:ok, _} = Postgres.save_snapshot(stream, 100, "TestAggregate", %{"v" => 100})
+      {:ok, _} = Postgres.save_snapshot(stream, 200, "TestAggregate", %{"v" => 200})
+      {:ok, _} = Postgres.save_snapshot(stream, 300, "TestAggregate", %{"v" => 300})
+
+      deleted = Postgres.delete_snapshots_before(stream, 300)
+      assert deleted == 2
+
+      # Only version 300 should remain
+      {:ok, snapshot} = Postgres.get_latest_snapshot(stream)
+      assert snapshot.stream_version == 300
+    end
+
+    test "returns 0 when no snapshots to delete" do
+      assert Postgres.delete_snapshots_before("no-such-stream", 100) == 0
+    end
+
+    test "does not delete snapshots for other streams" do
+      stream_a = stream_id()
+      stream_b = stream_id()
+      {:ok, _} = Postgres.save_snapshot(stream_a, 100, "TestAggregate", %{"v" => 100})
+      {:ok, _} = Postgres.save_snapshot(stream_b, 100, "TestAggregate", %{"v" => 100})
+
+      Postgres.delete_snapshots_before(stream_a, 200)
+
+      # stream_b's snapshot should still exist
+      {:ok, snapshot} = Postgres.get_latest_snapshot(stream_b)
+      assert snapshot.stream_version == 100
+    end
+  end
+
   defp stream_id, do: "test-stream-#{System.unique_integer([:positive])}"
 
   defp event(key \\ "default") do

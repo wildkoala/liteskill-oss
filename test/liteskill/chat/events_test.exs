@@ -96,6 +96,44 @@ defmodule Liteskill.Chat.EventsTest do
     end
   end
 
+  describe "serialize/1 nested data" do
+    test "recursively stringifies nested map keys" do
+      event = %UserMessageAdded{
+        message_id: "m1",
+        content: "hello",
+        timestamp: "now",
+        tool_config: %{servers: ["s1"], selected_tools: [%{name: "tool1", id: "t1"}]}
+      }
+
+      result = Events.serialize(event)
+      tool_config = result.data["tool_config"]
+
+      # Nested map keys should be strings, not atoms
+      assert is_map(tool_config)
+      assert Map.has_key?(tool_config, "servers")
+      assert Map.has_key?(tool_config, "selected_tools")
+      refute Map.has_key?(tool_config, :servers)
+
+      # Deeply nested map keys should also be strings
+      [tool] = tool_config["selected_tools"]
+      assert Map.has_key?(tool, "name")
+      assert Map.has_key?(tool, "id")
+      refute Map.has_key?(tool, :name)
+    end
+
+    test "handles nil and primitive values in nested structures" do
+      event = %UserMessageAdded{
+        message_id: "m1",
+        content: "hello",
+        timestamp: "now",
+        tool_config: nil
+      }
+
+      result = Events.serialize(event)
+      assert result.data["tool_config"] == nil
+    end
+  end
+
   describe "module_for/1" do
     test "returns the module for a known event type" do
       assert Events.module_for("ConversationCreated") == ConversationCreated
